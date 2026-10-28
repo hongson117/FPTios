@@ -48,15 +48,14 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-      - name: Package FTVOS.ipa & FPT.ipa
+      - name: Package FTVOS.ipa
         run: |
           mkdir -p build/tvOS/Payload
           cp -R build/FPT.xcarchive/Products/Applications/FPT.app build/tvOS/Payload/
           cp Sources/AppIcon*.png build/tvOS/Payload/FPT.app/ || true
           cp Sources/Icon*.png build/tvOS/Payload/FPT.app/ || true
           cd build/tvOS && zip -r -q ../FTVOS.ipa Payload && cd ../..
-          cp build/FTVOS.ipa build/FPT.ipa
-          ls -lh build/FTVOS.ipa build/FPT.ipa
+          ls -lh build/FTVOS.ipa
 
       - name: Upload FTVOS Apple TV IPA
         uses: actions/upload-artifact@v4
@@ -64,7 +63,7 @@ jobs:
           name: FTVOS-AppleTV-IPA
           path: |
             build/FTVOS.ipa
-            build/FPT.ipa
+           
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -72,6 +71,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG_NAME="v2.0.0-${{ github.run_number }}"
-          gh release create "$TAG_NAME" build/FTVOS.ipa build/FPT.ipa \
+          gh release create "$TAG_NAME" build/FTVOS.ipa \
             --title "FTVOS Apple TV (tvOS FairPlay 4K/FHD) - v2.0.0 Build #${{ github.run_number }}" \
             --notes "Ứng dụng FTVOS độc lập dành riêng cho Apple TV (tvOS) hỗ trợ Đăng Nhập SĐT + OTP, Đăng Xuất & Đổi Tài Khoản trực tiếp trên Apple TV, giải mã phần cứng FairPlay (SigmaDRM + CastLabs DRMtoday) và tự động cập nhật lịch Ngoại Hạng Anh."
