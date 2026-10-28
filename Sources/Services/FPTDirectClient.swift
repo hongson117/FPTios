@@ -32,6 +32,8 @@ public final class FPTDirectClient {
     private var cachedRawChannels: [[String: Any]] = []
     private var cachedLiveEvents: [FPTChannel] = []
     private var lastEventsFetchTime: TimeInterval = 0
+    private var cachedEplHighlights: [FPTChannel] = []
+    private var lastEplHighlightsFetchTime: TimeInterval = 0
     private var cachedVodSeries: [FPTChannel] = []
     private var cachedVodMovies: [FPTChannel] = []
     private var lastVodFetchTime: TimeInterval = 0
@@ -1010,10 +1012,12 @@ public final class FPTDirectClient {
         }
 
         let vodLists = await fetchVodCatalog(config: config, force: forceEvents)
+        let eplHighlights = await fetchEplHighlights(config: config, force: forceEvents)
         let intlChannels = intlDrmList + intlOpenList
 
         let categories: [FPTCategory] = [
             FPTCategory(id: "live_football", title: "Trực Tiếp", icon: "dot.radiowaves.left.and.right", channels: liveEvents),
+            FPTCategory(id: "epl_highlights", title: "Ngoại Hạng Anh", icon: "soccerball", channels: eplHighlights),
             FPTCategory(id: "vod_series", title: "Phim Bộ", icon: "film.stack.fill", channels: vodLists.series),
             FPTCategory(id: "vod_movies", title: "Phim Lẻ", icon: "popcorn.fill", channels: vodLists.movies),
             FPTCategory(id: "intl_channels", title: "Kênh Nước Ngoài", icon: "globe.americas.fill", channels: intlChannels),
@@ -1365,6 +1369,128 @@ public final class FPTDirectClient {
             lastVodFetchTime = now
         }
         return (seriesList, moviesList)
+    }
+
+    // MARK: - Kho Highlight & Xem Lại Ngoại Hạng Anh Chính Chủ FPT Play (navigation/page/ngoai-hang-anh)
+    private func fetchEplHighlights(config: FPTBootstrapConfig, force: Bool) async -> [FPTChannel] {
+        let now = Date().timeIntervalSince1970
+        if !force && !cachedEplHighlights.isEmpty && (now - lastEplHighlightsFetchTime) < 180 {
+            return cachedEplHighlights
+        }
+
+        let eplBlocks: [(blockId: String, blockType: String, tag: String)] = [
+            ("692d0460b3310d7520862257", "highlight", "HIGHLIGHTS NGOẠI HẠNG ANH"),
+            ("692d0474a643252ac65c844a", "highlight", "XEM LẠI TRẬN ĐẤU"),
+            ("692d0486014aff76cc46497f", "highlight", "BÀN THẮNG & TẠP CHÍ"),
+            ("69c67c129be47c06f53b20e3", "highlight", "THẾ GIỚI NGOẠI HẠNG"),
+            ("6ab12f5aba11facdaaf4c428", "highlight", "KHOẢNH KHẮC NÓNG"),
+            ("69f1bfa75cf8b519c1c6558a", "highlight", "GÓC NHÌN CHIẾN THUẬT"),
+            ("6a99183a69a0e118d370b9d8", "highlight", "FANTASY PLAY"),
+            ("6952b4c2c64b53bb62ee38a0", "vod", "BÓNG ĐÁ ANH TỔNG HỢP")
+        ]
+
+        var fetchedBlocks: [(index: Int, tag: String, items: [[String: Any]])] = []
+        await withTaskGroup(of: (Int, String, [[String: Any]])?.self) { group in
+            for (idx, src) in eplBlocks.enumerated() {
+                group.addTask { [weak self] in
+                    guard let self = self else { return nil }
+                    guard let (st, payload) = try? await self.requestJSON(
+                        config: config,
+                        route: "playos/block/\(src.blockType)/\(src.blockId)",
+                        extraQuery: [("page_id", "ngoai-hang-anh")]
+                    ), st == 200 else {
+                        return nil
+                    }
+                    if let arr = payload["data"] as? [[String: Any]] {
+                        return (idx, src.tag, arr)
+                    } else if let dict = payload["data"] as? [String: Any],
+                              let arr = (dict["content"] as? [[String: Any]]) ?? (dict["items"] as? [[String: Any]]) {
+                        return (idx, src.tag, arr)
+                    }
+                    return nil
+                }
+            }
+            for await res in group {
+                if let r = res {
+                    fetchedBlocks.append(r)
+                }
+            }
+        }
+
+        fetchedBlocks.sort { $0.index < $1.index }
+
+        var eplList: [FPTChannel] = []
+        var seenIds: Set<String> = []
+
+        for blk in fetchedBlocks {
+            for item in blk.items {
+                let itemType = (item["type"] as? String) ?? ""
+                guard itemType == "vod" || itemType.isEmpty else { continue }
+                let vodId = String(describing: item["id"] ?? item["_id"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let title = ((item["title"] as? String) ?? (item["name"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !vodId.isEmpty, !title.isEmpty, !seenIds.contains(vodId) else { continue }
+                seenIds.insert(vodId)
+
+                let detailObj = (item["detail"] as? [String: Any]) ?? [:]
+                let durationStr = ((detailObj["duration_s"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let shortDesc = ((detailObj["short_description"] as? String) ?? (detailObj["description"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let metaArr = (detailObj["meta_data"] as? [String]) ?? []
+                let metaLine = metaArr.filter { !$0.isEmpty }.joined(separator: " • ")
+
+                let imgObj = (item["image"] as? [String: Any]) ?? [:]
+                let landscapePoster = (imgObj["landscape_title"] as? String)
+                    ?? (imgObj["landscape"] as? String)
+                    ?? (imgObj["portrait_mobile"] as? String)
+                    ?? (imgObj["portrait"] as? String)
+                    ?? ""
+                let portraitPoster = (imgObj["portrait_mobile"] as? String)
+                    ?? (imgObj["portrait"] as? String)
+                    ?? landscapePoster
+                let titleLogo = (imgObj["title"] as? String) ?? ""
+
+                let fullDesc: String
+                if !shortDesc.isEmpty && !metaLine.isEmpty {
+                    fullDesc = "[\(metaLine)] \(shortDesc)"
+                } else if !shortDesc.isEmpty {
+                    fullDesc = shortDesc
+                } else if !metaLine.isEmpty {
+                    fullDesc = "Ngoại Hạng Anh bản quyền FPT Play (\(metaLine))."
+                } else {
+                    fullDesc = "Video Highlight & Xem lại Ngoại Hạng Anh trên FPT Play."
+                }
+
+                let statusLabel = !durationStr.isEmpty ? durationStr : "Premier League"
+
+                eplList.append(FPTChannel(
+                    id: "epl_hl_\(vodId)",
+                    channelId: vodId,
+                    name: title,
+                    badge: "⚽ \(blk.tag)",
+                    categoryId: "epl_highlights",
+                    category: "⚽ HIGHLIGHT NGOẠI HẠNG ANH",
+                    logo: landscapePoster,
+                    portraitLogo: portraitPoster,
+                    titleLogo: titleLogo,
+                    desc: fullDesc,
+                    is4K: true,
+                    isDRM: true,
+                    isLive: false,
+                    statusText: statusLabel,
+                    resolution: "Premier League • FHD/4K",
+                    fps: statusLabel,
+                    isVod: true,
+                    isSeries: false,
+                    vodId: vodId,
+                    episodeId: "0"
+                ))
+            }
+        }
+
+        if !eplList.isEmpty {
+            cachedEplHighlights = eplList
+            lastEplHighlightsFetchTime = now
+        }
+        return eplList
     }
 
     // MARK: - Tìm kiếm toàn bộ Kho Phim Bộ & Phim Lẻ trên máy chủ FPT Play (GET search/vod)

@@ -62,6 +62,10 @@ public struct FPTMainView: View {
         service.categories.first(where: { $0.id == "live_football" })?.channels ?? []
     }
 
+    private var eplHighlightsList: [FPTChannel] {
+        service.categories.first(where: { $0.id == "epl_highlights" })?.channels ?? []
+    }
+
     private var vodSeriesList: [FPTChannel] {
         service.categories.first(where: { $0.id == "vod_series" })?.channels ?? []
     }
@@ -116,6 +120,8 @@ public struct FPTMainView: View {
             return intlChannelsList.first
         case "live_football":
             return liveEventsList.first
+        case "epl_highlights":
+            return eplHighlightsList.first ?? liveEventsList.first
         case "vod_series":
             return vodSeriesList.first
         case "vod_movies":
@@ -236,6 +242,7 @@ public struct FPTMainView: View {
             ("tv_guide", "tv", "Truyền hình"),
             ("home", "house.fill", "Trang chủ"),
             ("live_football", "sportscourt.fill", "Trực tiếp"),
+            ("epl_highlights", "soccerball", "Ngoại Hạng Anh"),
             ("vod_series", "play.square.stack.fill", "Phim bộ"),
             ("vod_movies", "film.fill", "Phim lẻ"),
             ("intl_channels", "globe.asia.australia.fill", "Nước ngoài"),
@@ -563,6 +570,8 @@ public struct FPTMainView: View {
                 g2HomeScreen
             case "live_football":
                 g2LiveSportsScreen
+            case "epl_highlights":
+                g2EplHighlightsScreen
             case "vod_series":
                 g2VodCatalogScreen(isSeries: true)
             case "vod_movies":
@@ -742,7 +751,7 @@ public struct FPTMainView: View {
                             HStack(spacing: 8) {
                                 Image(systemName: "play.fill")
                                     .font(.system(size: 14, weight: .black))
-                                Text(active.isVod ? "Chi tiết & Xem phim" : "Phát trực tiếp ngay")
+                                Text(active.categoryId == "epl_highlights" ? "Xem Highlight ngay" : (active.isVod ? "Chi tiết & Xem phim" : "Phát trực tiếp ngay"))
                                     .font(.system(size: 15, weight: .bold))
                             }
                             .padding(.horizontal, 20)
@@ -751,7 +760,7 @@ public struct FPTMainView: View {
                         .buttonStyle(FPTG2VodActionButtonStyle())
 
                         HStack(spacing: 8) {
-                            Text(active.badge.replacingOccurrences(of: "🎞️ ", with: "").replacingOccurrences(of: "🎬 ", with: ""))
+                            Text(active.badge.replacingOccurrences(of: "🎞️ ", with: "").replacingOccurrences(of: "🎬 ", with: "").replacingOccurrences(of: "⚽ ", with: ""))
                             Text("•")
                             Text(active.resolution)
                             if !active.fps.isEmpty {
@@ -842,6 +851,15 @@ public struct FPTMainView: View {
                     g2HorizontalLandscapeRail(
                         title: "Chương trình & Sự kiện trực tiếp",
                         items: Array(liveEventsList.prefix(14)),
+                        showTimePill: true
+                    )
+                }
+
+                // Dải 3B: Highlight Ngoại Hạng Anh mới nhất
+                if !eplHighlightsList.isEmpty {
+                    g2HorizontalLandscapeRail(
+                        title: "⚽ Highlight & Xem lại Ngoại Hạng Anh",
+                        items: Array(eplHighlightsList.prefix(14)),
                         showTimePill: true
                     )
                 }
@@ -984,6 +1002,15 @@ public struct FPTMainView: View {
                     )
                 }
 
+                // Khối Highlight Ngoại Hạng Anh ngay trong mục Thể Thao
+                if !eplHighlightsList.isEmpty {
+                    g2HorizontalLandscapeRail(
+                        title: "⚽ Highlight Ngoại Hạng Anh mới nhất",
+                        items: Array(eplHighlightsList.prefix(14)),
+                        showTimePill: true
+                    )
+                }
+
                 // Khối "Lịch thi đấu và kết quả" chuẩn screen-football.png
                 if !liveEventsList.isEmpty {
                     g2MatchScheduleCardsRail(items: liveEventsList)
@@ -1027,6 +1054,88 @@ public struct FPTMainView: View {
                                     showTimePill: true
                                 ) {
                                     focusedChannel = ev
+                                }
+                            }
+                            .buttonStyle(FPTG2CardButtonStyle())
+                        }
+                    }
+                    .padding(.horizontal, 36)
+                }
+                .focusSection()
+            }
+            .padding(.bottom, 64)
+        }
+    }
+
+    // MARK: - 7B. Màn Hình HIGHLIGHT & XEM LẠI NGOẠI HẠNG ANH (Premier League)
+    private var g2EplHighlightsScreen: some View {
+        let groupedRails = groupChannelsByBadge(eplHighlightsList)
+        let eplLiveEvents = liveEventsList.filter {
+            $0.name.lowercased().contains("ngoại hạng") ||
+            $0.desc.lowercased().contains("ngoại hạng") ||
+            $0.channelId.lowercased().contains("epl")
+        }
+
+        return ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 18) {
+                g2HeroSpotlightBanner(
+                    for: heroChannel ?? eplHighlightsList.first ?? eplLiveEvents.first,
+                    sectionLabel: "Ngoại Hạng Anh • Premier League"
+                )
+
+                if !eplLiveEvents.isEmpty {
+                    g2HorizontalLandscapeRail(
+                        title: "🔴 Trực tiếp & Lịch phát sóng Ngoại Hạng Anh (\(eplLiveEvents.count))",
+                        items: eplLiveEvents,
+                        showTimePill: true
+                    )
+                }
+
+                ForEach(groupedRails, id: \.title) { rail in
+                    g2HorizontalLandscapeRail(
+                        title: rail.title,
+                        items: rail.items,
+                        showTimePill: true
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack {
+                        Text("Tất cả Highlight & Xem lại Ngoại Hạng Anh (\(eplHighlightsList.count))")
+                            .font(.system(size: 23, weight: .bold))
+                            .foregroundColor(.white)
+                        Spacer()
+                        Button {
+                            Task {
+                                await service.fetchCatalog(forceEvents: true)
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.clockwise")
+                                Text("Làm mới")
+                            }
+                            .font(.system(size: 15, weight: .bold))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color.white.opacity(0.12))
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                        }
+                        .buttonStyle(FPTG2CardButtonStyle())
+                    }
+                    .padding(.horizontal, 36)
+
+                    LazyVGrid(columns: fourColumns, spacing: 26) {
+                        ForEach(eplHighlightsList) { item in
+                            Button {
+                                openChannel(item)
+                            } label: {
+                                FPTG2LandscapePosterCard(
+                                    channel: item,
+                                    historyItem: service.historyItem(forVodOrChannelId: item.vodId),
+                                    showTimePill: true
+                                ) {
+                                    focusedChannel = item
                                 }
                             }
                             .buttonStyle(FPTG2CardButtonStyle())
@@ -1139,6 +1248,7 @@ public struct FPTMainView: View {
             let cleanTitle = ch.badge
                 .replacingOccurrences(of: "🎞️ ", with: "")
                 .replacingOccurrences(of: "🎬 ", with: "")
+                .replacingOccurrences(of: "⚽ ", with: "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let key = cleanTitle.isEmpty ? "Nổi bật" : cleanTitle
             if dict[key] == nil {
@@ -1760,7 +1870,7 @@ public struct FPTMainView: View {
     // MARK: - Điều Phối Mở Kênh / Sự Kiện / Phim Bộ / Phim Lẻ Chuẩn G2 (VodDetailFragment cho mọi phim VOD)
     private func openWatchHistoryItem(_ item: FPTWatchHistoryItem) {
         guard !isResolving else { return }
-        if item.channel.isVod {
+        if item.channel.isVod && item.channel.categoryId != "epl_highlights" {
             isResolving = true
             resolvingName = item.channel.name
             Task {
@@ -1782,8 +1892,9 @@ public struct FPTMainView: View {
     private func openChannel(_ channel: FPTChannel, customResumeSeconds: Double? = nil) {
         guard !isResolving else { return }
 
-        // Trên G2, khi bấm vào bất kỳ bộ phim nào (cả Phim Bộ lẫn Phim Lẻ / Galaxy Play) đều mở màn hình chi tiết phim VodDetailFragment (Xem ngay, Xem từ đầu, Trailer, Tập phim, Diễn viên, Nội dung tương tự)
-        if channel.isVod {
+        // Trên G2, khi bấm vào bất kỳ bộ phim nào (cả Phim Bộ lẫn Phim Lẻ / Galaxy Play) đều mở màn hình chi tiết phim VodDetailFragment,
+        // còn với video Highlight / Xem lại Ngoại Hạng Anh ("epl_highlights") thì phát trực tiếp ngay lập tức!
+        if channel.isVod && channel.categoryId != "epl_highlights" {
             isResolving = true
             resolvingName = channel.name
             Task {
