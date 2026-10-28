@@ -159,7 +159,7 @@ public struct FPTMainView: View {
 
                 // Khung nội dung chính bên phải thanh Sidebar (x = 122pt chuẩn G2)
                 mainContentArea
-                    .padding(.leading, 122)
+                    .padding(.leading, 288)
                     .focusSection()
 
                 // Thanh điều hướng dọc bên trái chuẩn FPT Play Android TV (v2_home_menu_nav_view)
@@ -266,7 +266,7 @@ public struct FPTMainView: View {
                     ZStack(alignment: .bottomTrailing) {
                         Circle()
                             .fill(Color.white.opacity(0.92))
-                            .frame(width: 58, height: 58)
+                            .frame(width: 96, height: 96)
 
                         // Khuôn mặt cười xanh đặc trưng của FPT Play Android TV
                         Circle()
@@ -280,27 +280,27 @@ public struct FPTMainView: View {
                                     endPoint: .bottomTrailing
                                 )
                             )
-                            .frame(width: 46, height: 46)
+                            .frame(width: 78, height: 78)
                             .overlay(
                                 VStack(spacing: 3) {
                                     HStack(spacing: 8) {
-                                        Circle().fill(Color.white).frame(width: 6, height: 6)
-                                        Circle().fill(Color.white).frame(width: 6, height: 6)
+                                        Circle().fill(Color.white).frame(width: 10, height: 10)
+                                        Circle().fill(Color.white).frame(width: 10, height: 10)
                                     }
                                     Capsule()
                                         .fill(Color.white.opacity(0.9))
-                                        .frame(width: 14, height: 3)
+                                        .frame(width: 24, height: 5)
                                 }
                             )
 
                         Circle()
                             .fill(service.isAuthenticated ? Color.green : fptOrange)
-                            .frame(width: 14, height: 14)
+                            .frame(width: 22, height: 22)
                             .overlay(Circle().stroke(Color.black, lineWidth: 2))
                     }
 
                     Text(service.isAuthenticated ? "Tài khoản" : "Đăng nhập")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 22, weight: .semibold, design: .rounded))
                         .foregroundColor(service.isAuthenticated ? .green : fptOrange)
                         .lineLimit(1)
                 }
@@ -339,11 +339,11 @@ public struct FPTMainView: View {
             Image("FPTLogo")
                 .resizable()
                 .scaledToFit()
-                .frame(width: 68, height: 26)
+                .frame(width: 132, height: 50)
                 .opacity(0.85)
                 .padding(.bottom, 22)
         }
-        .frame(width: 120)
+        .frame(width: 284)
         .frame(maxHeight: .infinity)
         .background(
             ZStack {
@@ -2424,17 +2424,19 @@ struct FPTG2SidebarNavRow: View {
     @Environment(\.isFocused) private var isFocused
 
     var body: some View {
-        VStack(spacing: 5) {
+        HStack(spacing: 18) {
             Image(systemName: icon)
-                .font(.system(size: 20, weight: (isSelected || isFocused) ? .bold : .regular))
+                .font(.system(size: 34, weight: (isSelected || isFocused) ? .bold : .regular))
+                .frame(width: 44)
                 .foregroundColor(isFocused ? .white : (isSelected ? .white : Color.white.opacity(0.6)))
 
             Text(title)
-                .font(.system(size: 11, weight: (isSelected || isFocused) ? .bold : .medium))
+                .font(.system(size: 23, weight: (isSelected || isFocused) ? .bold : .semibold, design: .rounded))
                 .foregroundColor(isFocused ? .white : (isSelected ? .white : Color.white.opacity(0.6)))
                 .lineLimit(1)
         }
-        .frame(width: 92, height: 58)
+        .padding(.horizontal, 20)
+        .frame(width: 252, height: 80, alignment: .leading)
     }
 }
 
@@ -2467,7 +2469,7 @@ struct FPTG2SidebarButtonStyle: ButtonStyle {
                     if isSelected && !isFocused {
                         Capsule()
                             .fill(FPTTheme.accentGradient)
-                            .frame(width: 4, height: 26)
+                            .frame(width: 5, height: 40)
                     }
                 }
                 .scaleEffect(isFocused ? 1.06 : 1.0)
