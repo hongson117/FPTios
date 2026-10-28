@@ -113,6 +113,11 @@ public final class FPTDirectClient {
 
     public func dashToHlsUrl(_ url: String) -> String {
         guard !url.isEmpty else { return "" }
+        // Tuyệt đối không sửa đường dẫn nếu URL có chữ ký MD5 gắn liền với path (?sign= hoặc &sign=),
+        // vì CDN sẽ từ chối 403 Forbidden nếu đổi .mpd sang .m3u8 mà không ký lại.
+        if url.contains("?sign=") || url.contains("&sign=") {
+            return url
+        }
         if url.contains("dash_h_drm/index.mpd") {
             return url.replacingOccurrences(of: "dash_h_drm/index.mpd", with: "hls_h_drm/index.m3u8")
         }
@@ -121,6 +126,18 @@ public final class FPTDirectClient {
         }
         if url.contains("dash_drm/index.mpd") {
             return url.replacingOccurrences(of: "dash_drm/index.mpd", with: "hls_drm/index.m3u8")
+        }
+        if url.contains("dash_h/index.mpd") {
+            return url.replacingOccurrences(of: "dash_h/index.mpd", with: "hls_h/index.m3u8")
+        }
+        if url.contains("dash_a/index.mpd") {
+            return url.replacingOccurrences(of: "dash_a/index.mpd", with: "hls_a/index.m3u8")
+        }
+        if url.contains("live247-dash-avc/index.mpd") {
+            return url.replacingOccurrences(of: "live247-dash-avc/index.mpd", with: "live247-hls-avc/index.m3u8")
+        }
+        if url.contains("live-dash-avc/index.mpd") {
+            return url.replacingOccurrences(of: "live-dash-avc/index.mpd", with: "live-hls-avc/index.m3u8")
         }
         if url.contains(".smil/manifest.mpd") {
             return url.replacingOccurrences(of: ".smil/manifest.mpd", with: ".smil/playlist.m3u8")
@@ -1030,9 +1047,9 @@ public final class FPTDirectClient {
         var scoredEvents: [(priority: Int, beginTs: Int, channel: FPTChannel)] = []
         var seenEventIds: Set<String> = []
 
-        // Quét đầy đủ cả trang Thể Thao tổng hợp ("sport" - chứa Pickleball, V.League, Bóng rổ, Bóng chuyền, eSports...)
-        // lẫn trang Ngoại Hạng Anh ("ngoai-hang-anh") và Trang chủ ("home")
-        for pageId in ["sport", "ngoai-hang-anh", "home"] {
+        // Quét đầy đủ cả trang Thể Thao tổng hợp ("sport" - chứa NBA, Pickleball, V.League, Bóng rổ, Bóng chuyền, Võ thuật, eSports...),
+        // trang Sự Kiện ("event"), Ngoại Hạng Anh ("ngoai-hang-anh"), Võ Thuật/Đối Kháng ("ufc", "doi-khang") và Trang chủ ("home")
+        for pageId in ["sport", "event", "ngoai-hang-anh", "ufc", "doi-khang", "home"] {
             guard let (st, pagePayload) = try? await requestJSON(config: config, route: "navigation/page/\(pageId)"),
                   st == 200,
                   let dataObj = pagePayload["data"] as? [String: Any],
@@ -1045,14 +1062,14 @@ public final class FPTDirectClient {
                 let bid = String(describing: blk["id"] ?? blk["_id"] ?? "")
                 var items = (blk["content"] as? [[String: Any]]) ?? (blk["items"] as? [[String: Any]]) ?? (blk["data"] as? [[String: Any]]) ?? []
 
-                if items.isEmpty && btype == "highlight" && !bid.isEmpty {
+                if items.isEmpty && (btype == "highlight" || btype == "live_event" || btype == "event" || btype == "horizontal_slider") && !bid.isEmpty {
                     // Trên trang "home", chỉ lấy các block Nổi bật hoặc Thể thao để tốc độ tải nhanh nhất
                     if pageId == "home" && bid != "632f01322089bd00e5c5ed3d" && bid != "5677cc4a17dc1342ea2d9b48" {
                         continue
                     }
                     if let (hlCode, hlPayload) = try? await requestJSON(
                         config: config,
-                        route: "playos/block/highlight/\(bid)",
+                        route: "playos/block/\(btype.isEmpty ? "highlight" : btype)/\(bid)",
                         extraQuery: [("page_id", pageId)]
                     ), hlCode == 200 {
                         if let hlArr = hlPayload["data"] as? [[String: Any]] {
@@ -1068,7 +1085,7 @@ public final class FPTDirectClient {
                     guard ["event", "livetv", "premiere"].contains(itemType) else { continue }
                     let evId = String(describing: item["highlight_id"] ?? item["id"] ?? item["_id"] ?? "")
                     guard !evId.isEmpty, !seenEventIds.contains(evId) else { continue }
-                    if scoredEvents.count >= 36 { break }
+                    if scoredEvents.count >= 48 { break }
 
                     guard let (detCode, detPayload) = try? await requestJSON(config: config, route: "event/detail/\(evId)"),
                           detCode == 200,
@@ -1076,12 +1093,14 @@ public final class FPTDirectClient {
                         continue
                     }
 
-                    let channelId = (evData["id"] as? String) ?? (item["id"] as? String) ?? ""
-                    let title = (evData["title"] as? String) ?? (item["title"] as? String) ?? (item["name"] as? String) ?? ""
+                    let channelId = ((evData["id"] as? String) ?? (evData["asset_id"] as? String) ?? (item["id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let title = ((evData["title"] as? String) ?? (item["title"] as? String) ?? (item["name"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !channelId.isEmpty, !title.isEmpty else { continue }
                     seenEventIds.insert(evId)
 
                     let is4K = channelId.lowercased().contains("4k") || title.lowercased().contains("4k")
+                    let vmxStr = String(describing: evData["verimatrix"] ?? evData["drm"] ?? "1").lowercased()
+                    let isDrmEvent = (vmxStr == "1" || vmxStr == "true")
                     let imgObj = (item["image"] as? [String: Any]) ?? [:]
                     let evImgObj = (evData["image"] as? [String: Any]) ?? [:]
                     let thumb = (evImgObj["landscape_title"] as? String)
@@ -1134,7 +1153,7 @@ public final class FPTDirectClient {
                         logo: thumb,
                         desc: desc,
                         is4K: is4K,
-                        isDRM: true,
+                        isDRM: isDrmEvent,
                         isLive: isLiveNow,
                         statusText: scheduleStr,
                         resolution: is4K ? "4K UHD (HEVC)" : "Full HD (1080p)",
@@ -1964,7 +1983,7 @@ public final class FPTDirectClient {
             )
         }
 
-        let channelId = channel.channelId.trimmingCharacters(in: .whitespacesAndNewlines)
+        var channelId = channel.channelId.trimmingCharacters(in: .whitespacesAndNewlines)
         let eventId = channel.eventId.trimmingCharacters(in: .whitespacesAndNewlines)
         var title = channel.name
         var autoProfile = "adaptive_bitrate"
@@ -1972,13 +1991,29 @@ public final class FPTDirectClient {
         var scheduleLabel = channel.statusText
         var eventDesc = channel.desc
         var beginInt: Int? = nil
+        var isDrmContent = channel.isDRM
+        var sourceProvider = ""
 
         if !eventId.isEmpty {
             if let (evCode, evPayload) = try? await requestJSON(config: config, route: "event/detail/\(eventId)", authenticated: config.isAuthenticated),
                evCode == 200,
                let evData = evPayload["data"] as? [String: Any] {
-                title = (evData["title"] as? String) ?? title
-                autoProfile = (evData["auto_profile"] as? String) ?? autoProfile
+                if let realCid = ((evData["id"] as? String) ?? (evData["asset_id"] as? String))?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !realCid.isEmpty {
+                    channelId = realCid
+                }
+                if let evTitle = (evData["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !evTitle.isEmpty {
+                    title = evTitle
+                }
+                if let evAuto = (evData["auto_profile"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !evAuto.isEmpty {
+                    autoProfile = evAuto
+                }
+                let vmxStr = String(describing: evData["verimatrix"] ?? "").lowercased()
+                let drmStr = String(describing: evData["drm"] ?? "").lowercased()
+                if !vmxStr.isEmpty || !drmStr.isEmpty {
+                    isDrmContent = (vmxStr == "1" || vmxStr == "true" || drmStr == "1" || drmStr == "true")
+                }
+                sourceProvider = (evData["source_provider"] as? String) ?? sourceProvider
                 if let evImgObj = evData["image"] as? [String: Any] {
                     posterUrl = (evImgObj["landscape_title"] as? String)
                         ?? (evImgObj["landscape"] as? String)
@@ -1996,9 +2031,17 @@ public final class FPTDirectClient {
         } else if config.isAuthenticated {
             if let (detCode, detPayload) = try? await requestJSON(config: config, route: "tv/detail/\(channelId)", extraQuery: [("data_type", "")]),
                detCode == 200,
-               let chObj = detPayload["Channel"] as? [String: Any] {
+               let chObj = (detPayload["Channel"] as? [String: Any]) ?? (detPayload["data"] as? [String: Any]) {
                 title = (chObj["name"] as? String) ?? title
-                autoProfile = (chObj["auto_profile"] as? String) ?? autoProfile
+                if let chAuto = (chObj["auto_profile"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !chAuto.isEmpty {
+                    autoProfile = chAuto
+                }
+                let vmxStr = String(describing: chObj["verimatrix"] ?? "").lowercased()
+                let drmStr = String(describing: chObj["drm"] ?? "").lowercased()
+                if !vmxStr.isEmpty || !drmStr.isEmpty {
+                    isDrmContent = (vmxStr == "1" || vmxStr == "true" || drmStr == "1" || drmStr == "true")
+                }
+                sourceProvider = (chObj["source_provider"] as? String) ?? sourceProvider
             }
         }
 
@@ -2042,22 +2085,112 @@ public final class FPTDirectClient {
             ("stream_profile", "1")
         ]
 
-        let (httpSt, streamPayload) = (try? await requestJSON(
+        // 1. Ưu tiên gọi cổng Web/Safari FairPlay (/api/v7.1_w/stream/tv/...) để lấy luồng HLS FairPlay (.m3u8) gốc kèm chữ ký CDN hợp lệ cho các sự kiện trực tiếp (NBA, Võ thuật, Thể thao, Kênh TV)
+        var (httpSt, streamPayload) = (try? await requestWebJSON(
+            config: config,
+            route: "stream/tv/\(channelId)/\(autoProfile)",
+            extraQuery: streamQuery,
+            authenticated: config.isAuthenticated
+        )) ?? (500, [:])
+
+        var statusVal = String(describing: streamPayload["status"] ?? "0")
+        var sdata = (streamPayload["data"] as? [String: Any]) ?? [:]
+
+        // 2. Đồng thời gọi cổng SmartTV (/api/v7.1_stad/stream/tv/...) để bổ sung luồng 4K HEVC (url_dash_drm_h265) hoặc dự phòng khi cần
+        let (stadSt, stadPayload) = (try? await requestJSON(
             config: config,
             route: "stream/tv/\(channelId)/\(autoProfile)",
             extraQuery: streamQuery
         )) ?? (500, [:])
 
-        let statusVal = String(describing: streamPayload["status"] ?? "0")
-        let sdata = (streamPayload["data"] as? [String: Any]) ?? [:]
+        let stadStatusVal = String(describing: stadPayload["status"] ?? "0")
+        let stadData = (stadPayload["data"] as? [String: Any]) ?? [:]
 
-        let rawH265Drm = (sdata["url_dash_drm_h265"] as? String) ?? ""
-        let rawH264Drm = (sdata["url_sub"] as? String) ?? (sdata["url"] as? String) ?? (sdata["url_dash_drm"] as? String) ?? ""
-        let rawClear = (sdata["url_hls"] as? String) ?? (sdata["url_dash_no_drm"] as? String) ?? ""
+        if statusVal != "1" && stadStatusVal == "1" {
+            httpSt = stadSt
+            statusVal = stadStatusVal
+            streamPayload = stadPayload
+            sdata = stadData
+        } else {
+            if httpSt != 200 && stadSt == 200 {
+                httpSt = stadSt
+            }
+            for (k, v) in stadData {
+                if sdata[k] == nil || String(describing: sdata[k] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    sdata[k] = v
+                }
+            }
+        }
 
-        let hls4K = rawH265Drm.isEmpty ? "" : dashToHlsUrl(rawH265Drm)
-        let hlsH264 = rawH264Drm.isEmpty ? "" : dashToHlsUrl(rawH264Drm)
-        let hlsClear = rawClear.isEmpty ? "" : dashToHlsUrl(rawClear)
+        let isPlayableHls: (String) -> Bool = { url in
+            let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !trimmed.isEmpty && trimmed.contains(".m3u8") && !trimmed.contains(".mpd")
+        }
+
+        // 3. Tuyển chọn URL HLS (.m3u8) theo đúng chuẩn Safari FairPlay trên fptplay.vn (6195-e5581bdb4a15b3c8.js)
+        let h265Candidates: [String]
+        let h264Candidates: [String]
+
+        if isDrmContent {
+            h265Candidates = [
+                (sdata["url_hls_drm_dolby_vision"] as? String) ?? "",
+                (sdata["url_hls_drm_h265_hdr_10_plus"] as? String) ?? "",
+                (sdata["url_hls_drm_h265_hdr_10"] as? String) ?? "",
+                (sdata["url_hls_drm_h265_hlg"] as? String) ?? "",
+                (sdata["url_hls_drm_h265"] as? String) ?? "",
+                dashToHlsUrl((sdata["url_dash_drm_h265"] as? String) ?? ""),
+                (sdata["url_hls_dolby_vision"] as? String) ?? "",
+                (sdata["url_hls_h265_hdr_10_plus"] as? String) ?? "",
+                (sdata["url_hls_h265_hdr_10"] as? String) ?? "",
+                (sdata["url_hls_h265_hlg"] as? String) ?? "",
+                (sdata["url_hls_h265"] as? String) ?? "",
+                dashToHlsUrl((sdata["url_dash_h265"] as? String) ?? "")
+            ]
+            h264Candidates = [
+                (sdata["url_hls_drm"] as? String) ?? "",
+                (sdata["url_hls"] as? String) ?? "",
+                (sdata["url_sub"] as? String) ?? "",
+                (sdata["url_clean"] as? String) ?? "",
+                (sdata["url"] as? String) ?? "",
+                dashToHlsUrl((sdata["url_sub"] as? String) ?? ""),
+                dashToHlsUrl((sdata["url"] as? String) ?? ""),
+                dashToHlsUrl((sdata["url_dash_drm"] as? String) ?? ""),
+                dashToHlsUrl((sdata["url_dash_no_drm"] as? String) ?? "")
+            ]
+        } else {
+            h265Candidates = [
+                (sdata["url_hls_dolby_vision"] as? String) ?? "",
+                (sdata["url_hls_h265_hdr_10_plus"] as? String) ?? "",
+                (sdata["url_hls_h265_hdr_10"] as? String) ?? "",
+                (sdata["url_hls_h265_hlg"] as? String) ?? "",
+                (sdata["url_hls_h265"] as? String) ?? "",
+                (sdata["url_hls_drm_h265"] as? String) ?? "",
+                dashToHlsUrl((sdata["url_dash_h265"] as? String) ?? ""),
+                dashToHlsUrl((sdata["url_dash_drm_h265"] as? String) ?? "")
+            ]
+            h264Candidates = [
+                (sdata["url_hls"] as? String) ?? "",
+                (sdata["url_sub"] as? String) ?? "",
+                (sdata["url_clean"] as? String) ?? "",
+                (sdata["url"] as? String) ?? "",
+                (sdata["url_hls_drm"] as? String) ?? "",
+                dashToHlsUrl((sdata["url_dash_no_drm"] as? String) ?? ""),
+                dashToHlsUrl((sdata["url_sub"] as? String) ?? ""),
+                dashToHlsUrl((sdata["url"] as? String) ?? ""),
+                dashToHlsUrl((sdata["url_dash_drm"] as? String) ?? "")
+            ]
+        }
+
+        let clearCandidates: [String] = [
+            (sdata["url_hls"] as? String) ?? "",
+            (sdata["url_clean"] as? String) ?? "",
+            dashToHlsUrl((sdata["url_dash_no_drm"] as? String) ?? "")
+        ]
+
+        // Chỉ chấp nhận URL .m3u8 hợp lệ cho AVPlayer trên tvOS, không bao giờ đưa .mpd vào AVPlayer
+        let hls4K = h265Candidates.first(where: { isPlayableHls($0) }) ?? ""
+        let hlsH264 = h264Candidates.first(where: { isPlayableHls($0) }) ?? ""
+        let hlsClear = clearCandidates.first(where: { isPlayableHls($0) }) ?? ""
 
         let hasAnyStreamUrl = !hls4K.isEmpty || !hlsH264.isEmpty || !hlsClear.isEmpty
 
@@ -2065,7 +2198,7 @@ public final class FPTDirectClient {
         // hiển thị Màn Hình Tĩnh Chờ Phát Sóng (Poster sự kiện + Giờ thi đấu) giống hệt trên app điện thoại FPT Play!
         if !eventId.isEmpty && (!hasAnyStreamUrl || statusVal != "1") {
             if isUpcomingEvent || httpSt != 401 {
-                let serverMsg = (streamPayload["msg"] as? String) ?? ""
+                let serverMsg = (streamPayload["msg"] as? String) ?? (stadPayload["msg"] as? String) ?? ""
                 let waitMsg = !serverMsg.isEmpty
                     ? "\(serverMsg) • Lịch phát sóng: \(scheduleLabel)"
                     : "Trận đấu chưa mở luồng trực tiếp (Lịch phát sóng: \(scheduleLabel)). Màn hình sẽ tự động phát ngay khi trận đấu bắt đầu."
@@ -2098,7 +2231,7 @@ public final class FPTDirectClient {
         }
 
         guard statusVal == "1", hasAnyStreamUrl else {
-            let msg = (streamPayload["msg"] as? String) ?? "Không xin được phiên phát từ FPT Play"
+            let msg = (streamPayload["msg"] as? String) ?? (stadPayload["msg"] as? String) ?? "Không xin được phiên phát từ FPT Play"
             throw NSError(domain: "FPTDirectClient", code: -2, userInfo: [NSLocalizedDescriptionKey: msg])
         }
 
@@ -2112,7 +2245,7 @@ public final class FPTDirectClient {
             is4K = true
         } else if !hlsH264.isEmpty {
             primaryHls = hlsH264
-            fallbackHls = !hls4K.isEmpty ? hls4K : hlsClear
+            fallbackHls = !hlsClear.isEmpty && hlsClear != hlsH264 ? hlsClear : (!hls4K.isEmpty ? hls4K : "")
             is4K = false
         } else if !hlsClear.isEmpty {
             primaryHls = hlsClear
@@ -2126,11 +2259,16 @@ public final class FPTDirectClient {
         let merchant = (sdata["merchant"] as? String) ?? ""
         let streamSession = (sdata["stream_session"] as? String) ?? ""
 
+        let shouldEnableDrm = (isDrmContent || primaryHls.lowercased().contains("drm"))
+            && !sessionToken.isEmpty
+            && !merchant.isEmpty
+
         let drmConfig = await buildFairPlayDRMConfig(
-            enabled: !sessionToken.isEmpty && !merchant.isEmpty,
+            enabled: shouldEnableDrm,
             config: config,
             sessionToken: sessionToken,
-            merchant: merchant
+            merchant: merchant,
+            sourceProvider: sourceProvider
         )
 
         return FPTResolvedStream(
