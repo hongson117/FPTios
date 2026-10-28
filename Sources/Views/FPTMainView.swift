@@ -37,18 +37,6 @@ public struct FPTMainView: View {
     @State private var searchText: String = ""
     @State private var searchFilter: String = "all"
 
-    private let quickSearchTags: [(label: String, query: String)] = [
-        ("🔥 Cổ Trang", "Cổ trang"),
-        ("🎬 Galaxy Play", "Việt Nam"),
-        ("🇰🇷 Hàn Quốc", "Hàn Quốc"),
-        ("🇨🇳 Hoa Ngữ", "Trung Quốc"),
-        ("🇺🇸 Bom Tấn Mỹ", "Mỹ"),
-        ("🕵️ Hình Sự", "Hình sự"),
-        ("👻 Kinh Dị", "Kinh dị"),
-        ("🎌 Conan • Anime", "Conan"),
-        ("❤️ Tình Yêu", "Tình yêu")
-    ]
-
     private let g2Bg = FPTTheme.bg
     private let g2Surface = Color(red: 0.125, green: 0.13, blue: 0.145)   // #202125
     private let fptOrange = FPTTheme.accent
@@ -1083,28 +1071,7 @@ public struct FPTMainView: View {
                     }
                     .buttonStyle(FPTG2CardButtonStyle())
 
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            ForEach(quickSearchTags, id: \.query) { tag in
-                                Button {
-                                    searchText = tag.query
-                                    selectedNavId = "search"
-                                    Task {
-                                        await service.searchVodCatalog(query: tag.query)
-                                    }
-                                } label: {
-                                    Text(tag.label)
-                                        .font(.system(size: 15, weight: .bold))
-                                        .padding(.horizontal, 16)
-                                        .padding(.vertical, 10)
-                                        .background(Color.white.opacity(0.08))
-                                        .foregroundColor(.white)
-                                        .cornerRadius(20)
-                                }
-                                .buttonStyle(FPTG2CardButtonStyle())
-                            }
-                        }
-                    }
+                    Spacer()
                 }
                 .padding(.horizontal, 36)
                 .focusSection()
@@ -1375,31 +1342,6 @@ public struct FPTMainView: View {
                 }
                 .padding(.horizontal, 36)
                 .padding(.top, 28)
-
-                // Từ khóa gợi ý nhanh
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(quickSearchTags, id: \.query) { tag in
-                            let isTagActive = (service.lastSearchQuery.lowercased() == tag.query.lowercased())
-                            Button {
-                                searchText = tag.query
-                                Task {
-                                    await service.searchVodCatalog(query: tag.query)
-                                }
-                            } label: {
-                                Text(tag.label)
-                                    .font(.system(size: 16, weight: .bold))
-                                    .padding(.horizontal, 18)
-                                    .padding(.vertical, 10)
-                                    .background(isTagActive ? Color.white : Color(red: 0.16, green: 0.17, blue: 0.20))
-                                    .foregroundColor(isTagActive ? .black : .white)
-                                    .cornerRadius(20)
-                            }
-                            .buttonStyle(FPTG2CardButtonStyle())
-                        }
-                    }
-                    .padding(.horizontal, 36)
-                }
 
                 if !service.lastSearchQuery.isEmpty {
                     let seriesCount = service.searchResults.filter { $0.isSeries }.count
