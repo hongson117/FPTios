@@ -5,7 +5,8 @@
 //  - Trình phát gốc AVPlayerViewController toàn màn hình trên Apple TV (không có badge đo thông số góc dưới phải)
 //  - Màn Hình Chờ Sự Kiện Thể Thao (Match Waiting Slate) thiết kế chuẩn FPT Play Android TV (G2):
 //    Poster 16:9 toàn màn hình + Gradient trái/dưới + Pill giờ thi đấu + Nút Capsule "Xem ngay" / "Quay lại"
-//  - Hỗ trợ chuyển Tập Tiếp / Tập Trước cho Phim Bộ và chuyển Kênh Tiếp / Kênh Trước / Danh Sách Kênh cho Truyền Hình Trực Tiếp
+//  - Hỗ trợ chuyển Tập Tiếp / Tập Trước cho Phim Bộ, chuyển Kênh Tiếp / Kênh Trước / Danh Sách Kênh cho Truyền Hình Trực Tiếp
+//    và Menu Chất Lượng Phát (4K UHD 50fps Khóa Nét 2160p / Full HD 1080p 50fps Khóa Nét 1080p)
 //
 
 import SwiftUI
@@ -307,6 +308,7 @@ struct FPTAVPlayerRepresentable: UIViewControllerRepresentable {
         private var didApplyInitialSeek: Bool = false
 
         private var activeResolved: FPTResolvedStream?
+        private var activePlayingUrl: String = ""
         private var activeVodDetail: FPTVodDetail?
         private var activeEpisode: FPTEpisode?
         private var onEpisodeChanged: ((FPTEpisode) -> Void)?
@@ -324,6 +326,7 @@ struct FPTAVPlayerRepresentable: UIViewControllerRepresentable {
             in controller: AVPlayerViewController
         ) {
             self.activeResolved = resolved
+            self.activePlayingUrl = resolved.hlsUrl
             self.activeVodDetail = vodDetail
             self.activeEpisode = episode
             self.onEpisodeChanged = onEpisodeChanged
@@ -338,6 +341,64 @@ struct FPTAVPlayerRepresentable: UIViewControllerRepresentable {
                 urlStr: resolved.hlsUrl,
                 resolved: resolved,
                 resumeSeconds: resumeSeconds,
+                controller: controller
+            )
+        }
+
+        @available(tvOS 15.0, *)
+        @MainActor
+        private func buildQualityMenu(on controller: AVPlayerViewController) -> UIMenu? {
+            guard let resolved = activeResolved else { return nil }
+            let url4K = (resolved.hls4KUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let url1080 = (resolved.hlsH264Url ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+            var actions: [UIAction] = []
+            let isPlaying4K = (!url4K.isEmpty && activePlayingUrl == url4K) || (resolved.is4K && activePlayingUrl == resolved.hlsUrl)
+
+            if !url4K.isEmpty && (resolved.is4K || resolved.channelId.lowercased().contains("4k") || resolved.title.lowercased().contains("4k")) {
+                let act4K = UIAction(
+                    title: isPlaying4K ? "▶ 4K UHD 50fps — Khóa nét 2160p (Đang phát)" : "4K UHD 50fps — Khóa nét 2160p",
+                    image: UIImage(systemName: "4k.tv.fill")
+                ) { [weak self] _ in
+                    self?.switchQualityStream(urlStr: url4K, controller: controller)
+                }
+                actions.append(act4K)
+            }
+
+            let target1080 = !url1080.isEmpty ? url1080 : resolved.hlsUrl
+            if !target1080.isEmpty {
+                let isPlaying1080 = !isPlaying4K
+                let act1080 = UIAction(
+                    title: isPlaying1080 ? "▶ Full HD 1080p 50fps — Khóa nét 1080p (Đang phát)" : "Full HD 1080p 50fps — Khóa nét 1080p",
+                    image: UIImage(systemName: "tv.fill")
+                ) { [weak self] _ in
+                    self?.switchQualityStream(urlStr: target1080, controller: controller)
+                }
+                actions.append(act1080)
+            }
+
+            guard !actions.isEmpty else { return nil }
+            let label = isPlaying4K ? "Chất lượng: 4K UHD 50fps" : "Chất lượng: 1080p 50fps"
+            return UIMenu(
+                title: label,
+                image: UIImage(systemName: isPlaying4K ? "4k.tv.fill" : "tv.fill"),
+                children: actions
+            )
+        }
+
+        @MainActor
+        private func switchQualityStream(urlStr: String, controller: AVPlayerViewController) {
+            guard let resolved = activeResolved, !urlStr.isEmpty, urlStr != activePlayingUrl else { return }
+            let currentSec = player.map { CMTimeGetSeconds($0.currentTime()) } ?? 0
+            let resumeSec = (currentSec.isFinite && currentSec >= 5 && activeVodDetail != nil) ? currentSec : 0
+            self.activePlayingUrl = urlStr
+            self.didFallback = true
+            self.didApplyInitialSeek = false
+            configureTransportControls(on: controller)
+            loadUrl(
+                urlStr: urlStr,
+                resolved: resolved,
+                resumeSeconds: resumeSec,
                 controller: controller
             )
         }
@@ -357,7 +418,11 @@ struct FPTAVPlayerRepresentable: UIViewControllerRepresentable {
             guard let curChannelId = activeResolved?.channelId,
                   let curIdx = allTvChannels.firstIndex(where: { $0.channelId == curChannelId }) else {
                 if #available(tvOS 15.0, *) {
-                    controller.transportBarCustomMenuItems = []
+                    var items: [UIMenuElement] = []
+                    if let qMenu = buildQualityMenu(on: controller) {
+                        items.append(qMenu)
+                    }
+                    controller.transportBarCustomMenuItems = items
                     controller.infoViewActions = []
                 }
                 return
@@ -366,6 +431,10 @@ struct FPTAVPlayerRepresentable: UIViewControllerRepresentable {
             if #available(tvOS 15.0, *) {
                 var transportItems: [UIMenuElement] = []
                 var infoActions: [UIAction] = []
+
+                if let qMenu = buildQualityMenu(on: controller) {
+                    transportItems.append(qMenu)
+                }
 
                 let nextIdx = (curIdx + 1) % allTvChannels.count
                 let nextCh = allTvChannels[nextIdx]
@@ -420,6 +489,10 @@ struct FPTAVPlayerRepresentable: UIViewControllerRepresentable {
                 var transportItems: [UIMenuElement] = []
                 var infoActions: [UIAction] = []
 
+                if let qMenu = buildQualityMenu(on: controller) {
+                    transportItems.append(qMenu)
+                }
+
                 if curIdx + 1 < detail.episodes.count {
                     let nextEp = detail.episodes[curIdx + 1]
                     let nextAction = UIAction(
@@ -473,6 +546,7 @@ struct FPTAVPlayerRepresentable: UIViewControllerRepresentable {
                     let newResolved = try await FPTService.shared.resolveStream(for: targetChannel)
                     guard !newResolved.hlsUrl.isEmpty else { return }
                     self.activeResolved = newResolved
+                    self.activePlayingUrl = newResolved.hlsUrl
                     self.didFallback = false
                     self.didApplyInitialSeek = false
                     self.onChannelSwitched?(newResolved)
@@ -501,6 +575,7 @@ struct FPTAVPlayerRepresentable: UIViewControllerRepresentable {
                     )
                     self.activeEpisode = targetEp
                     self.activeResolved = newResolved
+                    self.activePlayingUrl = newResolved.hlsUrl
                     self.didFallback = false
                     self.didApplyInitialSeek = false
                     self.onEpisodeChanged?(targetEp)
@@ -546,6 +621,7 @@ struct FPTAVPlayerRepresentable: UIViewControllerRepresentable {
             controller: AVPlayerViewController
         ) {
             guard let url = URL(string: urlStr) else { return }
+            self.activePlayingUrl = urlStr
 
             var options: [String: Any] = [:]
             if let headers = resolved.mediaHeaders, !headers.isEmpty {
@@ -635,7 +711,9 @@ struct FPTAVPlayerRepresentable: UIViewControllerRepresentable {
                        fb != urlStr {
                         self.didFallback = true
                         Task { @MainActor in
-                            FPTService.shared.appendLog("🔄 Tự động chuyển sang luồng FHD H.264 dự phòng...")
+                            FPTService.shared.appendLog("🔄 Tự động chuyển sang luồng FHD 1080p50 dự phòng...")
+                            self.activePlayingUrl = fb
+                            self.configureTransportControls(on: controller)
                             self.loadUrl(urlStr: fb, resolved: resolved, resumeSeconds: resumeSeconds, controller: controller)
                         }
                     }

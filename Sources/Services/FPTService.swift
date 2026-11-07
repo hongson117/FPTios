@@ -16,7 +16,7 @@ import Combine
 public final class FPTService: ObservableObject {
     public static let shared = FPTService()
 
-    @Published public var prefer4K: Bool = false
+    @Published public var prefer4K: Bool = true
     @Published public var isStandaloneReady: Bool = true
     @Published public var isAuthenticated: Bool = false
     @Published public var userId: String = ""
@@ -39,7 +39,7 @@ public final class FPTService: ObservableObject {
     public private(set) var bootstrapConfig: FPTBootstrapConfig
 
     private let defaults = UserDefaults.standard
-    private let prefer4KKey = "ftvos_appletv_prefer_4k_v2"
+    private let prefer4KKey = "ftvos_appletv_prefer_4k_v3"
     private let watchHistoryKey = "ftvos_appletv_watch_history_v1"
 
     private init() {

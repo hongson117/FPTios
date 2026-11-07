@@ -175,7 +175,7 @@ public struct FPTMainView: View {
                             Text("Đang mở \(resolvingName)...")
                                 .font(.system(size: 24, weight: .bold))
                                 .foregroundColor(.white)
-                            Text("Chuẩn Full HD 1080p • FairPlay Hardware DRM")
+                            Text(service.prefer4K ? "Chuẩn 4K UHD / 1080p 50fps Khóa Nét • FairPlay DRM" : "Chuẩn Full HD 1080p 50fps Khóa Nét • FairPlay DRM")
                                 .font(.system(size: 17, weight: .semibold))
                                 .foregroundColor(fptOrange)
                         }
@@ -465,14 +465,14 @@ public struct FPTMainView: View {
                         service.togglePrefer4K()
                     } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: "tv.fill")
+                            Image(systemName: service.prefer4K ? "4k.tv.fill" : "tv.fill")
                                 .font(.system(size: 20))
                                 .foregroundColor(fptOrange)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Chuẩn Full HD 1080p")
+                                Text(service.prefer4K ? "Ưu tiên 4K UHD (Khóa nét)" : "Chế độ Full HD 1080p")
                                     .font(.system(size: 16, weight: .bold))
                                     .foregroundColor(.white)
-                                Text("Luồng 1080p 50fps ổn định")
+                                Text(service.prefer4K ? "Khóa cứng 2160p50 / 1080p50" : "Khóa cứng 1080p 50fps")
                                     .font(.system(size: 12))
                                     .foregroundColor(.gray)
                             }
