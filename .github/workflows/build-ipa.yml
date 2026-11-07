@@ -17,21 +17,17 @@ jobs:
 
       - name: Select Xcode
         run: |
-          if [ -d "/Applications/Xcode_16.2.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_16.2.app
-          elif [ -d "/Applications/Xcode_16.1.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_16.1.app
-          elif [ -d "/Applications/Xcode_16.0.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_16.0.app
-          elif [ -d "/Applications/Xcode_16.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_16.app
+          if [ -d "/Applications/Xcode_16.4.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.4.app
+          elif [ -d "/Applications/Xcode_16.3.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.3.app
           else
             sudo xcode-select -s /Applications/Xcode.app
           fi
           xcodebuild -version
 
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: which xcodegen || brew install xcodegen
 
       - name: Generate Xcode Project
         run: xcodegen generate
@@ -63,7 +59,6 @@ jobs:
           name: FTVOS-AppleTV-IPA
           path: |
             build/FTVOS.ipa
-           
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -72,5 +67,5 @@ jobs:
         run: |
           TAG_NAME="v2.0.0-${{ github.run_number }}"
           gh release create "$TAG_NAME" build/FTVOS.ipa \
-            --title "FTVOS Apple TV (tvOS FairPlay 4K/FHD) - v2.0.0 Build #${{ github.run_number }}" \
-            --notes "Ứng dụng FTVOS độc lập dành riêng cho Apple TV (tvOS) hỗ trợ Đăng Nhập SĐT + OTP, Đăng Xuất & Đổi Tài Khoản trực tiếp trên Apple TV, giải mã phần cứng FairPlay (SigmaDRM + CastLabs DRMtoday) và tự động cập nhật lịch Ngoại Hạng Anh."
+            --title "FTVOS Apple TV (tvOS FairPlay 1080p FHD) - v2.0.0 Build #${{ github.run_number }}" \
+            --notes "Ứng dụng FTVOS độc lập dành riêng cho Apple TV (tvOS) chuẩn hóa luồng 1080p 50fps Full HD ổn định cho Ngoại Hạng Anh & Thể Thao trực tiếp."
