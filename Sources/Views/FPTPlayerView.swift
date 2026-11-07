@@ -481,6 +481,7 @@ struct FPTAVPlayerRepresentable: UIViewControllerRepresentable {
             }
         }
 
+        @MainActor
         private func configureEpisodeTransportControls(detail: FPTVodDetail, on controller: AVPlayerViewController) {
             let curId = activeEpisode?.id ?? activeResolved?.eventId ?? "0"
             let curIdx = detail.episodes.firstIndex(where: { $0.id == curId }) ?? 0

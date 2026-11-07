@@ -2696,8 +2696,11 @@ public final class FPTDirectClient {
         var (rawHls4K, rawHlsH264, rawHlsClear) = extractHlsCandidates(sdata)
         var streamSession = (sdata["stream_session"] as? String) ?? ""
 
-        async let initial4KLock = lockMasterPlaylistToHighestVariant(masterUrl: rawHls4K, streamSession: streamSession)
-        async let initialH264Lock = lockMasterPlaylistToHighestVariant(masterUrl: rawHlsH264, streamSession: streamSession)
+        let stad4KInput = rawHls4K
+        let stadH264Input = rawHlsH264
+        let stadSessionInput = streamSession
+        async let initial4KLock = lockMasterPlaylistToHighestVariant(masterUrl: stad4KInput, streamSession: stadSessionInput)
+        async let initialH264Lock = lockMasterPlaylistToHighestVariant(masterUrl: stadH264Input, streamSession: stadSessionInput)
         var (locked4K, lockedH264) = await (initial4KLock, initialH264Lock)
 
         // 2. Nếu cổng SmartTV không trả về .m3u8 hợp lệ (ví dụ kênh có chữ ký .mpd?sign=...), gọi cổng Web/Safari (/api/v7.1_w/stream/tv/...)
@@ -2723,10 +2726,11 @@ public final class FPTDirectClient {
                     rawHls4K = w4K
                     rawHlsH264 = wH264
                     rawHlsClear = wClear
-                    streamSession = (sdata["stream_session"] as? String) ?? ""
+                    let webSessionInput = (sdata["stream_session"] as? String) ?? ""
+                    streamSession = webSessionInput
 
-                    async let web4KLock = lockMasterPlaylistToHighestVariant(masterUrl: rawHls4K, streamSession: streamSession)
-                    async let webH264Lock = lockMasterPlaylistToHighestVariant(masterUrl: rawHlsH264, streamSession: streamSession)
+                    async let web4KLock = lockMasterPlaylistToHighestVariant(masterUrl: w4K, streamSession: webSessionInput)
+                    async let webH264Lock = lockMasterPlaylistToHighestVariant(masterUrl: wH264, streamSession: webSessionInput)
                     (locked4K, lockedH264) = await (web4KLock, webH264Lock)
                 }
             }
