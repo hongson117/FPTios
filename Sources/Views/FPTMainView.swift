@@ -175,7 +175,7 @@ public struct FPTMainView: View {
                             Text("Đang mở \(resolvingName)...")
                                 .font(.system(size: 24, weight: .bold))
                                 .foregroundColor(.white)
-                            Text(service.prefer4K ? "Chế độ 4K UHD HEVC • FairPlay Hardware DRM" : "Chế độ Full HD • FairPlay Hardware DRM")
+                            Text("Chuẩn Full HD 1080p • FairPlay Hardware DRM")
                                 .font(.system(size: 17, weight: .semibold))
                                 .foregroundColor(fptOrange)
                         }
@@ -465,14 +465,14 @@ public struct FPTMainView: View {
                         service.togglePrefer4K()
                     } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: "4k.tv.fill")
+                            Image(systemName: "tv.fill")
                                 .font(.system(size: 20))
-                                .foregroundColor(service.prefer4K ? fptOrange : .gray)
+                                .foregroundColor(fptOrange)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(service.prefer4K ? "Ưu tiên 4K UHD" : "Chế độ Full HD")
+                                Text("Chuẩn Full HD 1080p")
                                     .font(.system(size: 16, weight: .bold))
                                     .foregroundColor(.white)
-                                Text("Bấm để chuyển đổi")
+                                Text("Luồng 1080p 50fps ổn định")
                                     .font(.system(size: 12))
                                     .foregroundColor(.gray)
                             }
@@ -675,15 +675,13 @@ public struct FPTMainView: View {
                             .foregroundColor(.white)
                             .shadow(color: FPTTheme.accent2.opacity(0.5), radius: 8, x: 0, y: 2)
 
-                        if active.is4K {
-                            Text("4K UHD")
-                                .font(.system(size: 12, weight: .black))
-                                .padding(.horizontal, 9)
-                                .padding(.vertical, 4)
-                                .background(Color.white.opacity(0.18))
-                                .foregroundColor(.white)
-                                .cornerRadius(5)
-                        }
+                        Text(active.is4K ? "4K UHD" : "1080p FHD")
+                            .font(.system(size: 12, weight: .black))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 4)
+                            .background(Color.white.opacity(0.18))
+                            .foregroundColor(.white)
+                            .cornerRadius(5)
 
                         if !active.statusText.isEmpty {
                             Text(active.statusText)
@@ -2274,19 +2272,17 @@ struct FPTG2LandscapePosterCard: View {
 
                     Spacer()
 
-                    if channel.is4K {
-                        Text("4K")
-                            .font(.system(size: 12, weight: .black))
-                            .foregroundColor(Color(red: 0.95, green: 0.80, blue: 0.45))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.black.opacity(0.82))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 4)
-                                    .stroke(Color(red: 0.95, green: 0.80, blue: 0.45).opacity(0.6), lineWidth: 1)
-                            )
-                            .cornerRadius(4)
-                    }
+                    Text(channel.is4K ? "4K" : "1080p")
+                        .font(.system(size: 12, weight: .black))
+                        .foregroundColor(Color(red: 0.95, green: 0.80, blue: 0.45))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.82))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Color(red: 0.95, green: 0.80, blue: 0.45).opacity(0.6), lineWidth: 1)
+                        )
+                        .cornerRadius(4)
                 }
                 .padding(10)
 
@@ -3004,7 +3000,7 @@ struct FPTVodDetailSheet: View {
                 tokens.append(epText)
             }
         }
-        tokens.append("FHD / 4K")
+        tokens.append("Full HD 1080p")
         return tokens
     }
 

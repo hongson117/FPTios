@@ -1102,7 +1102,7 @@ public final class FPTDirectClient {
                     guard !channelId.isEmpty, !title.isEmpty else { continue }
                     seenEventIds.insert(evId)
 
-                    let is4K = channelId.lowercased().contains("4k") || title.lowercased().contains("4k")
+                    let is4K = false
                     let vmxStr = String(describing: evData["verimatrix"] ?? evData["drm"] ?? "1").lowercased()
                     let isDrmEvent = (vmxStr == "1" || vmxStr == "true")
                     let imgObj = (item["image"] as? [String: Any]) ?? [:]
@@ -1319,11 +1319,11 @@ public final class FPTDirectClient {
                         portraitLogo: portraitPoster,
                         titleLogo: titleLogo,
                         desc: fullDesc,
-                        is4K: true,
+                        is4K: false,
                         isDRM: false,
                         isLive: false,
                         statusText: statusLabel,
-                        resolution: countryStr.isEmpty ? "Full HD / 4K HEVC" : "\(countryStr) • FHD/4K",
+                        resolution: countryStr.isEmpty ? "Full HD (1080p)" : "\(countryStr) • 1080p FHD",
                         fps: subAudioTag,
                         isVod: true,
                         isSeries: true,
@@ -1344,11 +1344,11 @@ public final class FPTDirectClient {
                         portraitLogo: portraitPoster,
                         titleLogo: titleLogo,
                         desc: fullDesc,
-                        is4K: true,
+                        is4K: false,
                         isDRM: false,
                         isLive: false,
                         statusText: statusLabel,
-                        resolution: countryStr.isEmpty ? "Full HD / 4K HEVC" : "\(countryStr) • FHD/4K",
+                        resolution: countryStr.isEmpty ? "Full HD (1080p)" : "\(countryStr) • 1080p FHD",
                         fps: subAudioTag,
                         isVod: true,
                         isSeries: false,
@@ -1472,11 +1472,11 @@ public final class FPTDirectClient {
                     portraitLogo: portraitPoster,
                     titleLogo: titleLogo,
                     desc: fullDesc,
-                    is4K: true,
+                    is4K: false,
                     isDRM: true,
                     isLive: false,
                     statusText: statusLabel,
-                    resolution: "Premier League • FHD/4K",
+                    resolution: "Premier League • 1080p FHD",
                     fps: statusLabel,
                     isVod: true,
                     isSeries: false,
@@ -1612,11 +1612,11 @@ public final class FPTDirectClient {
                 portraitLogo: portraitPoster,
                 titleLogo: titleLogo,
                 desc: fullDesc,
-                is4K: true,
+                is4K: false,
                 isDRM: false,
                 isLive: false,
                 statusText: statusLabel,
-                resolution: countryStr.isEmpty ? "Full HD / 4K HEVC" : "\(countryStr) • FHD/4K",
+                resolution: countryStr.isEmpty ? "Full HD (1080p)" : "\(countryStr) • 1080p FHD",
                 fps: isSeriesItem ? "Chọn Tập • TM/Phụ Đề" : "Phát Ngay • TM/Phụ Đề",
                 isVod: true,
                 isSeries: isSeriesItem,
@@ -1788,11 +1788,11 @@ public final class FPTDirectClient {
                             portraitLogo: relPort,
                             titleLogo: relTitleLogo,
                             desc: relShort,
-                            is4K: true,
+                            is4K: false,
                             isDRM: false,
                             isLive: false,
                             statusText: relDur.isEmpty ? (relIsSeries ? "Phim bộ" : "Phim lẻ") : relDur,
-                            resolution: relCountry.isEmpty ? "Full HD / 4K" : relCountry,
+                            resolution: relCountry.isEmpty ? "Full HD (1080p)" : relCountry,
                             fps: "TM/Phụ Đề",
                             isVod: true,
                             isSeries: relIsSeries,
@@ -1945,7 +1945,7 @@ public final class FPTDirectClient {
             sdata["url"]
         ].compactMap { $0 as? String }.contains(where: { isPlayableHls($0) })
 
-        // Dự phòng qua /api/v7.1_stad/ nếu cổng Web không trả về .m3u8
+        // Dự phòng qua /api/v7.1_stad/ chỉ khi cổng Web không trả về .m3u8 (thay thế đồng bộ sdata để không trộn lẫn session token)
         if !hasWebM3u8 {
             let (stadSt, stadPayload) = (try? await requestJSON(
                 config: config,
@@ -1954,14 +1954,10 @@ public final class FPTDirectClient {
                 authenticated: config.isAuthenticated
             )) ?? (500, [:])
             let stadData = (stadPayload["data"] as? [String: Any]) ?? stadPayload
-            if httpSt != 200 && stadSt == 200 {
+            if stadSt == 200 && !stadData.isEmpty {
                 httpSt = stadSt
                 streamPayload = stadPayload
-            }
-            for (k, v) in stadData {
-                if sdata[k] == nil || String(describing: sdata[k] ?? "").isEmpty {
-                    sdata[k] = v
-                }
+                sdata = stadData
             }
         }
 
@@ -2042,18 +2038,15 @@ public final class FPTDirectClient {
         let fallbackHls: String
         let is4K: Bool
 
-        if prefer4K && !hls4K.isEmpty {
-            primaryHls = hls4K
-            fallbackHls = hlsH264
-            is4K = true
-        } else if !hlsH264.isEmpty {
+        // Luôn ưu tiên luồng chuẩn 1080p Full HD (hlsH264) ổn định trên Apple TV, tránh luồng 4K ảo bị rớt độ phân giải xuống SD/480p
+        if !hlsH264.isEmpty {
             primaryHls = hlsH264
             fallbackHls = hls4K
             is4K = false
         } else if !hls4K.isEmpty {
             primaryHls = hls4K
             fallbackHls = ""
-            is4K = true
+            is4K = false
         } else {
             let msg = (streamPayload["msg"] as? String) ?? "Không lấy được luồng phát HLS cho bộ phim này."
             throw NSError(domain: "FPTDirectClient", code: -3, userInfo: [NSLocalizedDescriptionKey: msg])
@@ -2211,7 +2204,12 @@ public final class FPTDirectClient {
             ("stream_profile", "1")
         ]
 
-        // 1. Ưu tiên gọi cổng Web/Safari FairPlay (/api/v7.1_w/stream/tv/...) để lấy luồng HLS FairPlay (.m3u8) gốc kèm chữ ký CDN hợp lệ cho các sự kiện trực tiếp (NBA, Võ thuật, Thể thao, Kênh TV)
+        let isPlayableHls: (String) -> Bool = { url in
+            let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !trimmed.isEmpty && trimmed.contains(".m3u8") && !trimmed.contains(".mpd")
+        }
+
+        // 1. Ưu tiên gọi cổng Web/Safari FairPlay (/api/v7.1_w/stream/tv/...) để lấy luồng HLS 1080p FairPlay (.m3u8) gốc kèm chữ ký CDN và session đồng nhất
         var (httpSt, streamPayload) = (try? await requestWebJSON(
             config: config,
             route: "stream/tv/\(channelId)/\(autoProfile)",
@@ -2222,35 +2220,34 @@ public final class FPTDirectClient {
         var statusVal = String(describing: streamPayload["status"] ?? "0")
         var sdata = (streamPayload["data"] as? [String: Any]) ?? [:]
 
-        // 2. Đồng thời gọi cổng SmartTV (/api/v7.1_stad/stream/tv/...) để bổ sung luồng 4K HEVC (url_dash_drm_h265) hoặc dự phòng khi cần
-        let (stadSt, stadPayload) = (try? await requestJSON(
-            config: config,
-            route: "stream/tv/\(channelId)/\(autoProfile)",
-            extraQuery: streamQuery
-        )) ?? (500, [:])
+        let hasWebM3u8 = [
+            sdata["url_hls_drm"],
+            sdata["url_hls"],
+            sdata["url_sub"],
+            sdata["url_clean"],
+            sdata["url"],
+            sdata["url_hls_drm_h265"],
+            sdata["url_hls_h265"]
+        ].compactMap { $0 as? String }.contains(where: { isPlayableHls($0) })
 
-        let stadStatusVal = String(describing: stadPayload["status"] ?? "0")
-        let stadData = (stadPayload["data"] as? [String: Any]) ?? [:]
-
-        if statusVal != "1" && stadStatusVal == "1" {
-            httpSt = stadSt
-            statusVal = stadStatusVal
-            streamPayload = stadPayload
-            sdata = stadData
-        } else {
-            if httpSt != 200 && stadSt == 200 {
+        // 2. CHỈ gọi cổng SmartTV (/api/v7.1_stad/stream/tv/...) làm dự phòng khi cổng Web không trả về .m3u8 hợp lệ
+        //    (Tuyệt đối không gọi kép và trộn lẫn url_dash_drm_h265 vào session Web vì sẽ làm luồng epl-hn-01-4k bị rớt xuống 480p SD!)
+        var stadPayload: [String: Any] = [:]
+        if statusVal != "1" || !hasWebM3u8 {
+            let (stadSt, fetchedStadPayload) = (try? await requestJSON(
+                config: config,
+                route: "stream/tv/\(channelId)/\(autoProfile)",
+                extraQuery: streamQuery
+            )) ?? (500, [:])
+            stadPayload = fetchedStadPayload
+            let stadStatusVal = String(describing: stadPayload["status"] ?? "0")
+            let stadData = (stadPayload["data"] as? [String: Any]) ?? [:]
+            if stadStatusVal == "1" && !stadData.isEmpty {
                 httpSt = stadSt
+                statusVal = stadStatusVal
+                streamPayload = stadPayload
+                sdata = stadData
             }
-            for (k, v) in stadData {
-                if sdata[k] == nil || String(describing: sdata[k] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    sdata[k] = v
-                }
-            }
-        }
-
-        let isPlayableHls: (String) -> Bool = { url in
-            let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !trimmed.isEmpty && trimmed.contains(".m3u8") && !trimmed.contains(".mpd")
         }
 
         // 3. Tuyển chọn URL HLS (.m3u8) theo đúng chuẩn Safari FairPlay trên fptplay.vn (6195-e5581bdb4a15b3c8.js)
@@ -2365,16 +2362,18 @@ public final class FPTDirectClient {
         let fallbackHls: String
         let is4K: Bool
 
-        if prefer4K && !hls4K.isEmpty {
-            primaryHls = hls4K
-            fallbackHls = !hlsH264.isEmpty ? hlsH264 : hlsClear
-            is4K = true
-        } else if !hlsH264.isEmpty {
+        // Luôn ưu tiên luồng chuẩn 1080p Full HD (hlsH264 - url_hls_drm / hls_a_drm) cho toàn bộ Sự kiện Trực tiếp & Kênh TV
+        // để đảm bảo độ nét chuẩn 1080p 50fps giống hệt luồng 1080, không bị rớt xuống SD/480p như nhánh 4K ảo (hls_h_drm)
+        if !hlsH264.isEmpty {
             primaryHls = hlsH264
             fallbackHls = !hlsClear.isEmpty && hlsClear != hlsH264 ? hlsClear : (!hls4K.isEmpty ? hls4K : "")
             is4K = false
         } else if !hlsClear.isEmpty {
             primaryHls = hlsClear
+            fallbackHls = !hls4K.isEmpty ? hls4K : ""
+            is4K = false
+        } else if !hls4K.isEmpty {
+            primaryHls = hls4K
             fallbackHls = ""
             is4K = false
         } else {

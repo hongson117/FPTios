@@ -16,7 +16,7 @@ import Combine
 public final class FPTService: ObservableObject {
     public static let shared = FPTService()
 
-    @Published public var prefer4K: Bool = true
+    @Published public var prefer4K: Bool = false
     @Published public var isStandaloneReady: Bool = true
     @Published public var isAuthenticated: Bool = false
     @Published public var userId: String = ""
@@ -39,7 +39,7 @@ public final class FPTService: ObservableObject {
     public private(set) var bootstrapConfig: FPTBootstrapConfig
 
     private let defaults = UserDefaults.standard
-    private let prefer4KKey = "ftvos_appletv_prefer_4k"
+    private let prefer4KKey = "ftvos_appletv_prefer_4k_v2"
     private let watchHistoryKey = "ftvos_appletv_watch_history_v1"
 
     private init() {
@@ -327,11 +327,11 @@ public final class FPTService: ObservableObject {
             category: vodDetail.isSeries ? "Phim Bộ" : "Phim Lẻ",
             logo: vodDetail.poster,
             desc: vodDetail.desc,
-            is4K: true,
+            is4K: false,
             isDRM: vodDetail.isDrm,
             isLive: false,
             statusText: episode.title,
-            resolution: vodDetail.country.isEmpty ? "Full HD / 4K HEVC" : "\(vodDetail.country) • FHD/4K",
+            resolution: vodDetail.country.isEmpty ? "Full HD (1080p)" : "\(vodDetail.country) • 1080p FHD",
             fps: vodDetail.isSeries ? "Chọn Tập • TM/Phụ Đề" : "Phát Ngay • TM/Phụ Đề",
             isVod: true,
             isSeries: vodDetail.isSeries,

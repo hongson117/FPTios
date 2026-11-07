@@ -167,11 +167,9 @@ public struct FPTPlayerView: View {
                     Text("Thể thao trực tiếp")
                     Text("•")
                     Text("FPT Play")
-                    if currentStream.is4K {
-                        Text("•")
-                        Text("4K UHD")
-                            .foregroundColor(fptOrange)
-                    }
+                    Text("•")
+                    Text(currentStream.is4K ? "4K UHD" : "Full HD 1080p")
+                        .foregroundColor(fptOrange)
                 }
                 .font(.system(size: 19, weight: .medium))
                 .foregroundColor(Color.white.opacity(0.68))
@@ -570,6 +568,10 @@ struct FPTAVPlayerRepresentable: UIViewControllerRepresentable {
 
             let item = AVPlayerItem(asset: asset)
             item.preferredForwardBufferDuration = 8.0
+            item.preferredPeakBitRate = 0
+            if #available(tvOS 15.0, *) {
+                item.preferredMaximumResolution = .zero
+            }
 
             let titleMeta = AVMutableMetadataItem()
             titleMeta.identifier = .commonIdentifierTitle
