@@ -1,0 +1,81 @@
+{
+  "config_version": 2026110801,
+  "updated_at": "2026-11-08T08:00:00+07:00",
+  "latest_app_version": "2.1.0",
+  "latest_build_number": 6,
+  "latest_ipa_url": "https://github.com/hongson117/FPTios/releases/latest/download/FTVOS.ipa",
+  "release_page_url": "https://github.com/hongson117/FPTios/releases/latest",
+  "update_notes": "Cập nhật luồng Ngoại Hạng Anh 4K UHD 50fps qua cổng Apple (/api/v7.1_ios/), giữ đầy đủ nhóm âm thanh Stereo & Dolby 5.1 ở độ phân giải 3840x2160 và hỗ trợ tự động đổi luồng từ xa qua GitHub.",
+  "live_gateway_order": [
+    "ios",
+    "stad",
+    "web"
+  ],
+  "vod_gateway_order": [
+    "ios",
+    "web",
+    "stad"
+  ],
+  "channel_gateway_overrides": {
+    "hbo": ["stad", "ios", "web"],
+    "max-by-hbo": ["stad", "ios", "web"],
+    "cnn": ["stad", "ios", "web"],
+    "bbc-news": ["stad", "ios", "web"],
+    "warner-tv": ["stad", "ios", "web"],
+    "cartoon-network": ["stad", "ios", "web"],
+    "discovery": ["stad", "ios", "web"],
+    "axn": ["stad", "ios", "web"]
+  },
+  "h265_drm_keys": [
+    "url_hls_drm_dolby_vision",
+    "url_hls_drm_h265_hdr_10_plus",
+    "url_hls_drm_h265_hdr_10",
+    "url_hls_drm_h265_hlg",
+    "url_hls_drm_h265",
+    "url_hls_dolby_vision",
+    "url_hls_h265_hdr_10_plus",
+    "url_hls_h265_hdr_10",
+    "url_hls_h265_hlg",
+    "url_hls_h265"
+  ],
+  "h265_clear_keys": [
+    "url_hls_dolby_vision",
+    "url_hls_h265_hdr_10_plus",
+    "url_hls_h265_hdr_10",
+    "url_hls_h265_hlg",
+    "url_hls_h265",
+    "url_hls_drm_h265"
+  ],
+  "h264_drm_keys": [
+    "url_hls_drm",
+    "url_hls",
+    "url_sub",
+    "url_clean",
+    "url"
+  ],
+  "h264_clear_keys": [
+    "url_hls",
+    "url_sub",
+    "url_clean",
+    "url",
+    "url_hls_drm"
+  ],
+  "ios_extra_query": {
+    "device": "Apple TV",
+    "drm": "1",
+    "fhd": "1",
+    "2k": "1",
+    "4k": "1",
+    "hd": "1",
+    "dolby_vision": "1",
+    "hdr_10": "1",
+    "hdr_10_plus": "1",
+    "hlg": "1",
+    "h265": "1",
+    "deviceWidth": "3840",
+    "deviceHeight": "2160"
+  },
+  "keep_all_top_tier_audio_variants": true,
+  "enable_dash_to_hls_fallback": true,
+  "channel_direct_overrides": {}
+}

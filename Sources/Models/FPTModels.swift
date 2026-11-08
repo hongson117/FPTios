@@ -551,3 +551,156 @@ public struct FPTResolvedStream: Codable, Identifiable {
         self.scheduleText = scheduleText
     }
 }
+
+// MARK: - Cấu Hình Đổi Luồng Động & Cập Nhật Tự Động Qua GitHub (remote_stream_config.json)
+public struct FPTRemoteStreamConfig: Codable, Equatable {
+    public var configVersion: Int
+    public var updatedAt: String
+    public var latestAppVersion: String
+    public var latestBuildNumber: Int
+    public var latestIpaUrl: String
+    public var releasePageUrl: String
+    public var updateNotes: String
+    public var liveGatewayOrder: [String]
+    public var vodGatewayOrder: [String]
+    public var channelGatewayOverrides: [String: [String]]
+    public var h265DrmKeys: [String]
+    public var h265ClearKeys: [String]
+    public var h264DrmKeys: [String]
+    public var h264ClearKeys: [String]
+    public var iosExtraQuery: [String: String]
+    public var keepAllTopTierAudioVariants: Bool
+    public var enableDashToHlsFallback: Bool
+    public var channelDirectOverrides: [String: [String: String]]
+
+    enum CodingKeys: String, CodingKey {
+        case configVersion = "config_version"
+        case updatedAt = "updated_at"
+        case latestAppVersion = "latest_app_version"
+        case latestBuildNumber = "latest_build_number"
+        case latestIpaUrl = "latest_ipa_url"
+        case releasePageUrl = "release_page_url"
+        case updateNotes = "update_notes"
+        case liveGatewayOrder = "live_gateway_order"
+        case vodGatewayOrder = "vod_gateway_order"
+        case channelGatewayOverrides = "channel_gateway_overrides"
+        case h265DrmKeys = "h265_drm_keys"
+        case h265ClearKeys = "h265_clear_keys"
+        case h264DrmKeys = "h264_drm_keys"
+        case h264ClearKeys = "h264_clear_keys"
+        case iosExtraQuery = "ios_extra_query"
+        case keepAllTopTierAudioVariants = "keep_all_top_tier_audio_variants"
+        case enableDashToHlsFallback = "enable_dash_to_hls_fallback"
+        case channelDirectOverrides = "channel_direct_overrides"
+    }
+
+    public static func defaultConfig() -> FPTRemoteStreamConfig {
+        return FPTRemoteStreamConfig(
+            configVersion: 2026110801,
+            updatedAt: "2026-11-08T08:00:00+07:00",
+            latestAppVersion: "2.1.0",
+            latestBuildNumber: 6,
+            latestIpaUrl: "https://github.com/hongson117/FPTios/releases/latest/download/FTVOS.ipa",
+            releasePageUrl: "https://github.com/hongson117/FPTios/releases/latest",
+            updateNotes: "Cập nhật luồng Ngoại Hạng Anh 4K UHD 50fps qua cổng Apple (/api/v7.1_ios/) & tự động đồng bộ cấu hình đổi luồng từ GitHub.",
+            liveGatewayOrder: ["ios", "stad", "web"],
+            vodGatewayOrder: ["ios", "web", "stad"],
+            channelGatewayOverrides: [
+                "hbo": ["stad", "ios", "web"],
+                "max-by-hbo": ["stad", "ios", "web"],
+                "cnn": ["stad", "ios", "web"],
+                "bbc-news": ["stad", "ios", "web"],
+                "warner-tv": ["stad", "ios", "web"],
+                "cartoon-network": ["stad", "ios", "web"],
+                "discovery": ["stad", "ios", "web"],
+                "axn": ["stad", "ios", "web"]
+            ],
+            h265DrmKeys: [
+                "url_hls_drm_dolby_vision",
+                "url_hls_drm_h265_hdr_10_plus",
+                "url_hls_drm_h265_hdr_10",
+                "url_hls_drm_h265_hlg",
+                "url_hls_drm_h265",
+                "url_hls_dolby_vision",
+                "url_hls_h265_hdr_10_plus",
+                "url_hls_h265_hdr_10",
+                "url_hls_h265_hlg",
+                "url_hls_h265"
+            ],
+            h265ClearKeys: [
+                "url_hls_dolby_vision",
+                "url_hls_h265_hdr_10_plus",
+                "url_hls_h265_hdr_10",
+                "url_hls_h265_hlg",
+                "url_hls_h265",
+                "url_hls_drm_h265"
+            ],
+            h264DrmKeys: [
+                "url_hls_drm",
+                "url_hls",
+                "url_sub",
+                "url_clean",
+                "url"
+            ],
+            h264ClearKeys: [
+                "url_hls",
+                "url_sub",
+                "url_clean",
+                "url",
+                "url_hls_drm"
+            ],
+            iosExtraQuery: [
+                "device": "Apple TV",
+                "drm": "1",
+                "fhd": "1",
+                "2k": "1",
+                "4k": "1",
+                "hd": "1",
+                "dolby_vision": "1",
+                "hdr_10": "1",
+                "hdr_10_plus": "1",
+                "hlg": "1",
+                "h265": "1",
+                "deviceWidth": "3840",
+                "deviceHeight": "2160"
+            ],
+            keepAllTopTierAudioVariants: true,
+            enableDashToHlsFallback: true,
+            channelDirectOverrides: [:]
+        )
+    }
+}
+
+public struct FPTGitHubReleaseInfo: Codable, Equatable {
+    public let tagName: String
+    public let title: String
+    public let notes: String
+    public let publishedAt: String
+    public let ipaDownloadUrl: String
+    public let htmlUrl: String
+    public let fileSizeText: String
+    public let hasNewerBinary: Bool
+    public let remoteConfigVersion: Int
+
+    public init(
+        tagName: String,
+        title: String,
+        notes: String,
+        publishedAt: String,
+        ipaDownloadUrl: String,
+        htmlUrl: String,
+        fileSizeText: String,
+        hasNewerBinary: Bool,
+        remoteConfigVersion: Int
+    ) {
+        self.tagName = tagName
+        self.title = title
+        self.notes = notes
+        self.publishedAt = publishedAt
+        self.ipaDownloadUrl = ipaDownloadUrl
+        self.htmlUrl = htmlUrl
+        self.fileSizeText = fileSizeText
+        self.hasNewerBinary = hasNewerBinary
+        self.remoteConfigVersion = remoteConfigVersion
+    }
+}

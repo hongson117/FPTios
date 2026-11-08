@@ -213,9 +213,124 @@ public final class FPTDirectClient {
     private var pendingLoginVerifyToken: String = ""
     private var pendingRemoveDeviceToken: String = ""
 
+    // Cấu hình đổi luồng động & kiểm tra bản cập nhật từ GitHub (hongson117/FPTios)
+    public private(set) var remoteStreamConfig: FPTRemoteStreamConfig = FPTRemoteStreamConfig.defaultConfig()
     private static let savedDeviceKey = "ftvos_appletv_device_id_v2"
+    private static let savedRemoteConfigKey = "ftvos_github_remote_stream_config_v1"
 
-    private init() {}
+    private init() {
+        if let data = UserDefaults.standard.data(forKey: Self.savedRemoteConfigKey),
+           let saved = try? JSONDecoder().decode(FPTRemoteStreamConfig.self, from: data),
+           saved.configVersion >= FPTRemoteStreamConfig.defaultConfig().configVersion {
+            self.remoteStreamConfig = saved
+        }
+    }
+
+    // MARK: - Đồng bộ Cấu Hình Đổi Luồng Động & Kiểm Tra Bản Cập Nhật Mới Từ GitHub
+    public func syncRemoteStreamConfigFromGitHub() async -> FPTRemoteStreamConfig {
+        let ts = Int(Date().timeIntervalSince1970)
+        let rawUrlStr = "https://raw.githubusercontent.com/hongson117/FPTios/main/remote_stream_config.json?t=\(ts)"
+        guard let url = URL(string: rawUrlStr) else {
+            return remoteStreamConfig
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = 8.0
+        req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        req.setValue("FTVOS-AppleTV/2.1", forHTTPHeaderField: "User-Agent")
+
+        if let (data, resp) = try? await URLSession.shared.data(for: req),
+           let httpResp = resp as? HTTPURLResponse,
+           (200...299).contains(httpResp.statusCode),
+           let decoded = try? JSONDecoder().decode(FPTRemoteStreamConfig.self, from: data) {
+            self.remoteStreamConfig = decoded
+            if let encoded = try? JSONEncoder().encode(decoded) {
+                UserDefaults.standard.set(encoded, forKey: Self.savedRemoteConfigKey)
+            }
+            return decoded
+        }
+        return remoteStreamConfig
+    }
+
+    public static func currentAppVersionAndBuild() -> (version: String, build: Int) {
+        let ver = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "2.1.0"
+        let buildStr = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "5"
+        let buildInt = Int(buildStr.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 5
+        return (ver, buildInt)
+    }
+
+    public func checkGitHubReleaseAndConfig() async -> (FPTRemoteStreamConfig, FPTGitHubReleaseInfo) {
+        let cfg = await syncRemoteStreamConfigFromGitHub()
+        let (_, currentBuild) = Self.currentAppVersionAndBuild()
+
+        let apiStr = "https://api.github.com/repos/hongson117/FPTios/releases/latest"
+        if let url = URL(string: apiStr) {
+            var req = URLRequest(url: url)
+            req.httpMethod = "GET"
+            req.timeoutInterval = 8.0
+            req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            req.setValue("FTVOS-AppleTV/2.1", forHTTPHeaderField: "User-Agent")
+
+            if let (data, resp) = try? await URLSession.shared.data(for: req),
+               let httpResp = resp as? HTTPURLResponse,
+               (200...299).contains(httpResp.statusCode),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let tagName = (json["tag_name"] as? String) ?? "v\(cfg.latestAppVersion)-\(cfg.latestBuildNumber)"
+                let name = (json["name"] as? String) ?? "FTVOS Apple TV (\(tagName))"
+                let body = (json["body"] as? String) ?? cfg.updateNotes
+                let publishedAtRaw = (json["published_at"] as? String) ?? cfg.updatedAt
+                let htmlUrl = (json["html_url"] as? String) ?? cfg.releasePageUrl
+
+                var downloadUrl = cfg.latestIpaUrl
+                var sizeBytes: Int = 0
+                if let assets = json["assets"] as? [[String: Any]],
+                   let ipaAsset = assets.first(where: { (($0["name"] as? String) ?? "").lowercased().hasSuffix(".ipa") }) ?? assets.first {
+                    if let dl = ipaAsset["browser_download_url"] as? String, !dl.isEmpty {
+                        downloadUrl = dl
+                    }
+                    sizeBytes = (ipaAsset["size"] as? Int) ?? 0
+                }
+
+                // Tách số build từ tag_name dạng "v2.0.0-12" hoặc "v2.1.0-12"
+                var remoteBuild = cfg.latestBuildNumber
+                if let dashPart = tagName.split(separator: "-").last,
+                   let parsedBuild = Int(dashPart.filter { $0.isNumber }) {
+                    remoteBuild = max(remoteBuild, parsedBuild)
+                }
+
+                let sizeText = sizeBytes > 0
+                    ? String(format: "%.2f MB", Double(sizeBytes) / (1024.0 * 1024.0))
+                    : "~1.7 MB"
+
+                let info = FPTGitHubReleaseInfo(
+                    tagName: tagName,
+                    title: name,
+                    notes: body.isEmpty ? cfg.updateNotes : body,
+                    publishedAt: publishedAtRaw,
+                    ipaDownloadUrl: downloadUrl,
+                    htmlUrl: htmlUrl,
+                    fileSizeText: sizeText,
+                    hasNewerBinary: remoteBuild > currentBuild,
+                    remoteConfigVersion: cfg.configVersion
+                )
+                return (cfg, info)
+            }
+        }
+
+        let fallbackInfo = FPTGitHubReleaseInfo(
+            tagName: "v\(cfg.latestAppVersion)-\(cfg.latestBuildNumber)",
+            title: "FTVOS Apple TV v\(cfg.latestAppVersion) (Build #\(cfg.latestBuildNumber))",
+            notes: cfg.updateNotes,
+            publishedAt: cfg.updatedAt,
+            ipaDownloadUrl: cfg.latestIpaUrl,
+            htmlUrl: cfg.releasePageUrl,
+            fileSizeText: "~1.7 MB",
+            hasNewerBinary: cfg.latestBuildNumber > currentBuild,
+            remoteConfigVersion: cfg.configVersion
+        )
+        return (cfg, fallbackInfo)
+    }
 
     // MARK: - Khởi tạo cấu hình gốc ngay trên Apple TV (Không cần Laptop)
     private static func unmask(_ bytes: [UInt8]) -> String {
@@ -523,13 +638,18 @@ public final class FPTDirectClient {
 
         // Giữ toàn bộ các biến thể cùng độ phân giải & tốc độ khung hình cao nhất (ví dụ 3840x2160 cho cả nhóm âm thanh AAC 2.0 DEFAULT=YES và Dolby EC-3 5.1)
         // để AVPlayer luôn có đầy đủ track âm thanh mặc định mà vẫn loại bỏ 100% các độ phân giải thấp (360p/480p/720p/1080p25)!
-        let topTierVariants = sortedVariants.filter { v in
-            let sameHeight = (best.height == 0) || (v.height == best.height)
-            let sameWidth = (best.width == 0) || (v.width == best.width)
-            let sameFps = (best.fps <= 0.1) || (v.fps <= 0.1) || (abs(v.fps - best.fps) <= 1.0)
-            return sameHeight && sameWidth && sameFps
+        let chosenVariants: [StreamVariant]
+        if remoteStreamConfig.keepAllTopTierAudioVariants {
+            let topTierVariants = sortedVariants.filter { v in
+                let sameHeight = (best.height == 0) || (v.height == best.height)
+                let sameWidth = (best.width == 0) || (v.width == best.width)
+                let sameFps = (best.fps <= 0.1) || (v.fps <= 0.1) || (abs(v.fps - best.fps) <= 1.0)
+                return sameHeight && sameWidth && sameFps
+            }
+            chosenVariants = topTierVariants.isEmpty ? [best] : topTierVariants
+        } else {
+            chosenVariants = [best]
         }
-        let chosenVariants = topTierVariants.isEmpty ? [best] : topTierVariants
 
         var outLines: [String] = []
         for h in headerLines {
@@ -781,7 +901,7 @@ public final class FPTDirectClient {
         let localId = config.localId.isEmpty ? Self.currentOrNewDeviceId() : config.localId
 
         var queryItems: [URLQueryItem] = extraQuery.map { URLQueryItem(name: $0.0, value: $0.1) }
-        let iosCommon: [(String, String)] = [
+        var iosCommon: [(String, String)] = [
             ("drm", "1"),
             ("deviceWidth", "3840"),
             ("deviceHeight", "2160"),
@@ -793,6 +913,13 @@ public final class FPTDirectClient {
             ("device", "Apple TV"),
             ("stream_profile", "1")
         ]
+        for (rk, rv) in remoteStreamConfig.iosExtraQuery {
+            if let idx = iosCommon.firstIndex(where: { $0.0 == rk }) {
+                iosCommon[idx] = (rk, rv)
+            } else {
+                iosCommon.append((rk, rv))
+            }
+        }
         for (k, v) in iosCommon {
             if !queryItems.contains(where: { $0.name == k }) {
                 queryItems.append(URLQueryItem(name: k, value: v))
@@ -826,6 +953,106 @@ public final class FPTDirectClient {
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 500
         let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         return (status, json)
+    }
+
+    // MARK: - Điều phối gọi cổng API động ("ios", "stad", "web") theo cấu hình GitHub (remote_stream_config.json)
+    public func requestGatewayJSON(
+        gateway: String,
+        config: FPTBootstrapConfig,
+        method: String = "GET",
+        route: String,
+        extraQuery: [(String, String)] = [],
+        authenticated: Bool = true
+    ) async throws -> (Int, [String: Any]) {
+        switch gateway.lowercased() {
+        case "ios", "tvos", "apple":
+            return try await requestIOSJSON(
+                config: config,
+                method: method,
+                route: route,
+                extraQuery: extraQuery,
+                authenticated: authenticated
+            )
+        case "web", "safari", "w":
+            return try await requestWebJSON(
+                config: config,
+                method: method,
+                route: route,
+                extraQuery: extraQuery,
+                authenticated: authenticated
+            )
+        default:
+            return try await requestJSON(
+                config: config,
+                method: method,
+                route: route,
+                extraQuery: extraQuery,
+                authenticated: authenticated
+            )
+        }
+    }
+
+    private func buildDynamicCandidateArrays(
+        from dict: [String: Any],
+        isDrmContent: Bool,
+        channelOrVodId: String = ""
+    ) -> (h265Cands: [String], h264Cands: [String], clearCands: [String]) {
+        let dictHasDrmSession = !((dict["session"] as? String) ?? "").isEmpty && !((dict["merchant"] as? String) ?? "").isEmpty
+        let effectiveDrm = isDrmContent || dictHasDrmSession
+        let cfg = remoteStreamConfig
+
+        var h265Cands: [String] = []
+        var h264Cands: [String] = []
+
+        // Hỗ trợ ghi đè khẩn cấp URL từ GitHub remote_stream_config.json (nếu có)
+        if !channelOrVodId.isEmpty,
+           let overrideMap = cfg.channelDirectOverrides[channelOrVodId.lowercased()] {
+            if let custom4K = overrideMap["hls_4k"], !custom4K.isEmpty {
+                h265Cands.append(custom4K)
+            }
+            if let customH264 = overrideMap["hls_h264"], !customH264.isEmpty {
+                h264Cands.append(customH264)
+            }
+        }
+
+        let activeH265Keys = effectiveDrm ? cfg.h265DrmKeys : cfg.h265ClearKeys
+        let activeH264Keys = effectiveDrm ? cfg.h264DrmKeys : cfg.h264ClearKeys
+
+        for key in activeH265Keys {
+            if let val = dict[key] as? String, !val.isEmpty {
+                h265Cands.append(val)
+            }
+        }
+        for key in activeH264Keys {
+            if let val = dict[key] as? String, !val.isEmpty {
+                h264Cands.append(val)
+            }
+        }
+
+        if cfg.enableDashToHlsFallback {
+            if effectiveDrm {
+                h265Cands.append(dashToHlsUrl((dict["url_dash_drm_h265"] as? String) ?? ""))
+                h265Cands.append(dashToHlsUrl((dict["url_dash_h265"] as? String) ?? ""))
+                h264Cands.append(dashToHlsUrl((dict["url_sub"] as? String) ?? ""))
+                h264Cands.append(dashToHlsUrl((dict["url"] as? String) ?? ""))
+                h264Cands.append(dashToHlsUrl((dict["url_dash_drm"] as? String) ?? ""))
+                h264Cands.append(dashToHlsUrl((dict["url_dash_no_drm"] as? String) ?? ""))
+            } else {
+                h265Cands.append(dashToHlsUrl((dict["url_dash_h265"] as? String) ?? ""))
+                h265Cands.append(dashToHlsUrl((dict["url_dash_drm_h265"] as? String) ?? ""))
+                h264Cands.append(dashToHlsUrl((dict["url_dash_no_drm"] as? String) ?? ""))
+                h264Cands.append(dashToHlsUrl((dict["url_sub"] as? String) ?? ""))
+                h264Cands.append(dashToHlsUrl((dict["url"] as? String) ?? ""))
+                h264Cands.append(dashToHlsUrl((dict["url_dash_drm"] as? String) ?? ""))
+            }
+        }
+
+        let clearCands: [String] = [
+            (dict["url_hls"] as? String) ?? "",
+            (dict["url_clean"] as? String) ?? "",
+            cfg.enableDashToHlsFallback ? dashToHlsUrl((dict["url_dash_no_drm"] as? String) ?? "") : ""
+        ]
+        return (h265Cands, h264Cands, clearCands)
     }
 
     // MARK: - Đăng xuất thật trên máy chủ FPT Play (POST account/user/logout)
@@ -2413,83 +2640,54 @@ public final class FPTDirectClient {
             ("is_pre_stream", "0")
         ]
 
-        // 2. Ưu tiên gọi cổng Apple iOS/tvOS (/api/v7.1_ios/stream/vod/...) để nhận đầy đủ luồng 4K HEVC FairPlay (.m3u8) + 1080p H.264,
-        //    sau đó dự phòng sang cổng Web/Safari (/api/v7.1_w/) và SmartTV (/api/v7.1_stad/) nếu cần.
-        var (httpSt, streamPayload) = (try? await requestIOSJSON(
-            config: config,
-            route: "stream/vod/\(cleanVodId)/\(effectiveEpId)/\(autoProfile)",
-            extraQuery: vodQuery,
-            authenticated: config.isAuthenticated
-        )) ?? (500, [:])
-
-        if httpSt != 200 && effectiveEpId != cleanEpId {
-            let (retrySt, retryPayload) = (try? await requestIOSJSON(
-                config: config,
-                route: "stream/vod/\(cleanVodId)/\(cleanEpId)/\(autoProfile)",
-                extraQuery: vodQuery,
-                authenticated: config.isAuthenticated
-            )) ?? (500, [:])
-            if retrySt == 200 || streamPayload.isEmpty {
-                httpSt = retrySt
-                streamPayload = retryPayload
-            }
-        }
-
-        var sdata = (streamPayload["data"] as? [String: Any]) ?? streamPayload
-
         let isPlayableHls: (String) -> Bool = { url in
             let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
             return !trimmed.isEmpty && trimmed.contains(".m3u8") && !trimmed.contains(".mpd")
         }
 
-        let hasAnyPlayableM3u8: ([String: Any]) -> Bool = { dict in
-            [
-                dict["url_hls_drm_dolby_vision"],
-                dict["url_hls_drm_h265_hdr_10_plus"],
-                dict["url_hls_drm_h265_hdr_10"],
-                dict["url_hls_drm_h265_hlg"],
-                dict["url_hls_drm_h265"],
-                dict["url_hls_drm"],
-                dict["url_hls_dolby_vision"],
-                dict["url_hls_h265_hdr_10_plus"],
-                dict["url_hls_h265_hdr_10"],
-                dict["url_hls_h265_hlg"],
-                dict["url_hls_h265"],
-                dict["url_hls"],
-                dict["url_sub"],
-                dict["url_clean"],
-                dict["url"]
-            ].compactMap { $0 as? String }.contains(where: { isPlayableHls($0) })
+        let hasAnyPlayableM3u8: ([String: Any]) -> Bool = { [weak self] dict in
+            guard let self = self else { return false }
+            let (c4K, cH264, cClear) = self.buildDynamicCandidateArrays(from: dict, isDrmContent: isDrmContent, channelOrVodId: cleanVodId)
+            return (c4K + cH264 + cClear).contains(where: { isPlayableHls($0) })
         }
 
-        if !hasAnyPlayableM3u8(sdata) {
-            let (webSt, webPayload) = (try? await requestWebJSON(
+        // 2. Gọi tuần tự các cổng API theo thứ tự động trong remote_stream_config.json (vod_gateway_order: mặc định ["ios", "web", "stad"])
+        let vodGateways = remoteStreamConfig.vodGatewayOrder.isEmpty ? ["ios", "web", "stad"] : remoteStreamConfig.vodGatewayOrder
+        var httpSt = 500
+        var streamPayload: [String: Any] = [:]
+        var sdata: [String: Any] = [:]
+
+        for gw in vodGateways {
+            var (gwSt, gwPayload) = (try? await requestGatewayJSON(
+                gateway: gw,
                 config: config,
                 route: "stream/vod/\(cleanVodId)/\(effectiveEpId)/\(autoProfile)",
                 extraQuery: vodQuery,
                 authenticated: config.isAuthenticated
             )) ?? (500, [:])
-            let webData = (webPayload["data"] as? [String: Any]) ?? webPayload
-            if webSt == 200 && hasAnyPlayableM3u8(webData) {
-                httpSt = webSt
-                streamPayload = webPayload
-                sdata = webData
+
+            if gwSt != 200 && effectiveEpId != cleanEpId {
+                let (retrySt, retryPayload) = (try? await requestGatewayJSON(
+                    gateway: gw,
+                    config: config,
+                    route: "stream/vod/\(cleanVodId)/\(cleanEpId)/\(autoProfile)",
+                    extraQuery: vodQuery,
+                    authenticated: config.isAuthenticated
+                )) ?? (500, [:])
+                if retrySt == 200 || gwPayload.isEmpty {
+                    gwSt = retrySt
+                    gwPayload = retryPayload
+                }
             }
-        }
 
-        // Dự phòng qua /api/v7.1_stad/ chỉ khi cả cổng iOS và Web không trả về .m3u8 (thay thế đồng bộ sdata để không trộn lẫn session token)
-        if !hasAnyPlayableM3u8(sdata) {
-            let (stadSt, stadPayload) = (try? await requestJSON(
-                config: config,
-                route: "stream/vod/\(cleanVodId)/\(effectiveEpId)/\(autoProfile)",
-                extraQuery: vodQuery,
-                authenticated: config.isAuthenticated
-            )) ?? (500, [:])
-            let stadData = (stadPayload["data"] as? [String: Any]) ?? stadPayload
-            if stadSt == 200 && !stadData.isEmpty {
-                httpSt = stadSt
-                streamPayload = stadPayload
-                sdata = stadData
+            let gwData = (gwPayload["data"] as? [String: Any]) ?? gwPayload
+            if streamPayload.isEmpty || (gwSt == 200 && !gwData.isEmpty) {
+                httpSt = gwSt
+                streamPayload = gwPayload
+                sdata = gwData
+            }
+            if gwSt == 200 && hasAnyPlayableM3u8(gwData) {
+                break
             }
         }
 
@@ -2502,54 +2700,12 @@ public final class FPTDirectClient {
         let streamSession = (sdata["stream_session"] as? String) ?? ""
         let effectiveIsDrm = isDrmContent || (!sessionToken.isEmpty && !merchant.isEmpty)
 
-        // 3. Tuyển chọn URL HLS (.m3u8) theo đúng thứ tự ưu tiên FairPlay trên fptplay.vn (6195-e5581bdb4a15b3c8.js)
-        let h265Candidates: [String]
-        let h264Candidates: [String]
-
-        if effectiveIsDrm {
-            h265Candidates = [
-                (sdata["url_hls_drm_dolby_vision"] as? String) ?? "",
-                (sdata["url_hls_drm_h265_hdr_10_plus"] as? String) ?? "",
-                (sdata["url_hls_drm_h265_hdr_10"] as? String) ?? "",
-                (sdata["url_hls_drm_h265_hlg"] as? String) ?? "",
-                (sdata["url_hls_drm_h265"] as? String) ?? "",
-                (sdata["url_hls_dolby_vision"] as? String) ?? "",
-                (sdata["url_hls_h265_hdr_10_plus"] as? String) ?? "",
-                (sdata["url_hls_h265_hdr_10"] as? String) ?? "",
-                (sdata["url_hls_h265_hlg"] as? String) ?? "",
-                (sdata["url_hls_h265"] as? String) ?? "",
-                dashToHlsUrl((sdata["url_dash_drm_h265"] as? String) ?? "")
-            ]
-            h264Candidates = [
-                (sdata["url_hls_drm"] as? String) ?? "",
-                (sdata["url_hls"] as? String) ?? "",
-                (sdata["url_sub"] as? String) ?? "",
-                (sdata["url_clean"] as? String) ?? "",
-                (sdata["url"] as? String) ?? "",
-                dashToHlsUrl((sdata["url_dash_drm"] as? String) ?? ""),
-                dashToHlsUrl((sdata["url_dash_no_drm"] as? String) ?? "")
-            ]
-        } else {
-            h265Candidates = [
-                (sdata["url_hls_dolby_vision"] as? String) ?? "",
-                (sdata["url_hls_h265_hdr_10_plus"] as? String) ?? "",
-                (sdata["url_hls_h265_hdr_10"] as? String) ?? "",
-                (sdata["url_hls_h265_hlg"] as? String) ?? "",
-                (sdata["url_hls_h265"] as? String) ?? "",
-                (sdata["url_hls_drm_h265"] as? String) ?? "",
-                dashToHlsUrl((sdata["url_dash_h265"] as? String) ?? ""),
-                dashToHlsUrl((sdata["url_dash_drm_h265"] as? String) ?? "")
-            ]
-            h264Candidates = [
-                (sdata["url_hls"] as? String) ?? "",
-                (sdata["url_sub"] as? String) ?? "",
-                (sdata["url_clean"] as? String) ?? "",
-                (sdata["url"] as? String) ?? "",
-                (sdata["url_hls_drm"] as? String) ?? "",
-                dashToHlsUrl((sdata["url_dash_no_drm"] as? String) ?? ""),
-                dashToHlsUrl((sdata["url_dash_drm"] as? String) ?? "")
-            ]
-        }
+        // 3. Tuyển chọn URL HLS (.m3u8) theo cấu hình động từ GitHub (remote_stream_config.json)
+        let (h265Candidates, h264Candidates, _) = buildDynamicCandidateArrays(
+            from: sdata,
+            isDrmContent: effectiveIsDrm,
+            channelOrVodId: cleanVodId
+        )
 
         // Tuyệt đối chỉ nhận luồng .m3u8 hợp lệ cho AVPlayer trên tvOS, không bao giờ chọn .mpd (MPEG-DASH)
         let firstPlayable4K = h265Candidates.first(where: { isPlayableHls($0) }) ?? ""
@@ -2749,6 +2905,13 @@ public final class FPTDirectClient {
             )
         }
 
+        // Hỗ trợ ánh xạ lại mã kênh từ xa qua GitHub (remote_stream_config.json -> channel_direct_overrides[channelId]["remap_id"])
+        if let overrideMap = remoteStreamConfig.channelDirectOverrides[channelId.lowercased()],
+           let remappedId = overrideMap["remap_id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !remappedId.isEmpty {
+            channelId = remappedId
+        }
+
         let streamQuery: [(String, String)] = [
             ("fhd", "1"),
             ("data_type", ""),
@@ -2762,164 +2925,73 @@ public final class FPTDirectClient {
             return !trimmed.isEmpty && trimmed.contains(".m3u8") && !trimmed.contains(".mpd")
         }
 
-        let buildCandidateArrays: ([String: Any]) -> (h265Cands: [String], h264Cands: [String], clearCands: [String]) = { [weak self] dict in
-            guard let self = self else { return ([], [], []) }
-            let dictHasDrmSession = !((dict["session"] as? String) ?? "").isEmpty && !((dict["merchant"] as? String) ?? "").isEmpty
-            let effectiveDrm = isDrmContent || dictHasDrmSession
-            let h265Cands: [String]
-            let h264Cands: [String]
-            if effectiveDrm {
-                h265Cands = [
-                    (dict["url_hls_drm_dolby_vision"] as? String) ?? "",
-                    (dict["url_hls_drm_h265_hdr_10_plus"] as? String) ?? "",
-                    (dict["url_hls_drm_h265_hdr_10"] as? String) ?? "",
-                    (dict["url_hls_drm_h265_hlg"] as? String) ?? "",
-                    (dict["url_hls_drm_h265"] as? String) ?? "",
-                    self.dashToHlsUrl((dict["url_dash_drm_h265"] as? String) ?? ""),
-                    (dict["url_hls_dolby_vision"] as? String) ?? "",
-                    (dict["url_hls_h265_hdr_10_plus"] as? String) ?? "",
-                    (dict["url_hls_h265_hdr_10"] as? String) ?? "",
-                    (dict["url_hls_h265_hlg"] as? String) ?? "",
-                    (dict["url_hls_h265"] as? String) ?? "",
-                    self.dashToHlsUrl((dict["url_dash_h265"] as? String) ?? "")
-                ]
-                h264Cands = [
-                    (dict["url_hls_drm"] as? String) ?? "",
-                    (dict["url_hls"] as? String) ?? "",
-                    (dict["url_sub"] as? String) ?? "",
-                    (dict["url_clean"] as? String) ?? "",
-                    (dict["url"] as? String) ?? "",
-                    self.dashToHlsUrl((dict["url_sub"] as? String) ?? ""),
-                    self.dashToHlsUrl((dict["url"] as? String) ?? ""),
-                    self.dashToHlsUrl((dict["url_dash_drm"] as? String) ?? ""),
-                    self.dashToHlsUrl((dict["url_dash_no_drm"] as? String) ?? "")
-                ]
-            } else {
-                h265Cands = [
-                    (dict["url_hls_dolby_vision"] as? String) ?? "",
-                    (dict["url_hls_h265_hdr_10_plus"] as? String) ?? "",
-                    (dict["url_hls_h265_hdr_10"] as? String) ?? "",
-                    (dict["url_hls_h265_hlg"] as? String) ?? "",
-                    (dict["url_hls_h265"] as? String) ?? "",
-                    (dict["url_hls_drm_h265"] as? String) ?? "",
-                    self.dashToHlsUrl((dict["url_dash_h265"] as? String) ?? ""),
-                    self.dashToHlsUrl((dict["url_dash_drm_h265"] as? String) ?? "")
-                ]
-                h264Cands = [
-                    (dict["url_hls"] as? String) ?? "",
-                    (dict["url_sub"] as? String) ?? "",
-                    (dict["url_clean"] as? String) ?? "",
-                    (dict["url"] as? String) ?? "",
-                    (dict["url_hls_drm"] as? String) ?? "",
-                    self.dashToHlsUrl((dict["url_dash_no_drm"] as? String) ?? ""),
-                    self.dashToHlsUrl((dict["url_sub"] as? String) ?? ""),
-                    self.dashToHlsUrl((dict["url"] as? String) ?? ""),
-                    self.dashToHlsUrl((dict["url_dash_drm"] as? String) ?? "")
-                ]
-            }
-            let clearCands: [String] = [
-                (dict["url_hls"] as? String) ?? "",
-                (dict["url_clean"] as? String) ?? "",
-                self.dashToHlsUrl((dict["url_dash_no_drm"] as? String) ?? "")
-            ]
-            return (h265Cands, h264Cands, clearCands)
-        }
+        // Gọi tuần tự các cổng API theo cấu hình động từ GitHub (remote_stream_config.json):
+        // - Mặc định live_gateway_order = ["ios", "stad", "web"] (lấy trọn vẹn 4K 2160p50 HEVC + 1080p50 H.264 từ /api/v7.1_ios/)
+        // - Riêng các kênh trong channel_gateway_overrides (như HBO, CNN, BBC News) ưu tiên ["stad", "ios", "web"]
+        // - Nếu sau này FPT Play đổi cổng phát cho bất kỳ kênh nào, chỉ cần sửa remote_stream_config.json trên GitHub là toàn bộ Apple TV tự động đổi luồng ngay!
+        let configuredGateways = remoteStreamConfig.channelGatewayOverrides[channelId.lowercased()]
+            ?? remoteStreamConfig.liveGatewayOrder
+        let liveGateways = configuredGateways.isEmpty ? ["ios", "stad", "web"] : configuredGateways
 
-        // 1. Gọi cổng Apple iOS/tvOS (/api/v7.1_ios/stream/tv/...) trước tiên!
-        //    Thực nghiệm trên tài khoản VIP chứng minh:
-        //    - Cổng /api/v7.1_stad/ hiện trả Low-Latency CMAF .mpd (cmaf-hvc-drm/index.mpd) không thể đổi đuôi sang .m3u8 cho epl-hn-01-4k.
-        //    - Cổng /api/v7.1_w/ chỉ trả 1080p H.264 (web-hls-drm/index.m3u8) và KHÔNG trả luồng 4K HEVC cho epl-hn-01-4k.
-        //    - Chỉ cổng /api/v7.1_ios/ trả đồng thời cả hai luồng FairPlay HLS (.m3u8) chuẩn gốc Apple:
-        //      + url_hls_drm_h265: .../EPL_HN_01_4K_H265/hls_h_drm/index.m3u8 (True 4K 3840x2160 @ 50fps HEVC FairPlay)
-        //      + url:              .../EPL_HN_01_4K_H264/hls_a_drm/index.m3u8 (Full HD 1920x1080 @ 50fps H.264 FairPlay)
-        var (httpSt, streamPayload) = (try? await requestIOSJSON(
-            config: config,
-            route: "stream/tv/\(channelId)/\(autoProfile)",
-            extraQuery: streamQuery,
-            authenticated: config.isAuthenticated
-        )) ?? (500, [:])
+        var httpSt = 500
+        var statusVal = "0"
+        var streamPayload: [String: Any] = [:]
+        var sdata: [String: Any] = [:]
+        var h265Cands: [String] = []
+        var h264Cands: [String] = []
+        var clearCands: [String] = []
+        var streamSession = ""
+        var locked4K = FPTLockedHlsResult(originalUrl: "", lockedUrl: "", isReachable: false, maxHeight: 0, maxWidth: 0, maxFps: 0, maxBandwidth: 0)
+        var lockedH264 = FPTLockedHlsResult(originalUrl: "", lockedUrl: "", isReachable: false, maxHeight: 0, maxWidth: 0, maxFps: 0, maxBandwidth: 0)
+        var lastServerMsg = ""
 
-        var statusVal = String(describing: streamPayload["status"] ?? "0")
-        var sdata = (streamPayload["data"] as? [String: Any]) ?? [:]
-        var (h265Cands, h264Cands, clearCands) = buildCandidateArrays(sdata)
-        var streamSession = (sdata["stream_session"] as? String) ?? ""
-
-        let iosH265Cands = h265Cands
-        let iosH264Cands = h264Cands
-        let iosSessionInput = streamSession
-        async let initial4KLock = resolveFirstReachableLockedHls(candidates: iosH265Cands, streamSession: iosSessionInput)
-        async let initialH264Lock = resolveFirstReachableLockedHls(candidates: iosH264Cands, streamSession: iosSessionInput)
-        var (locked4K, lockedH264) = await (initial4KLock, initialH264Lock)
-
-        // 2. Nếu cổng iOS không có luồng sống (ví dụ nhóm kênh quốc tế Qnet/CastLabs như HBO, Max by HBO, CNN, BBC News, Warner TV
-        //    trả url rỗng trên /api/v7.1_ios/ nhưng trả url_sub FairPlay .m3u8 trên /api/v7.1_stad/), gọi tiếp /api/v7.1_stad/ đồng bộ!
-        var stadPayload: [String: Any] = [:]
-        if statusVal != "1" || (!locked4K.isReachable && !lockedH264.isReachable) {
-            let (stadSt, fetchedStadPayload) = (try? await requestJSON(
+        for gw in liveGateways {
+            let (gwSt, gwPayload) = (try? await requestGatewayJSON(
+                gateway: gw,
                 config: config,
                 route: "stream/tv/\(channelId)/\(autoProfile)",
                 extraQuery: streamQuery,
                 authenticated: config.isAuthenticated
             )) ?? (500, [:])
-            stadPayload = fetchedStadPayload
-            let stadStatusVal = String(describing: stadPayload["status"] ?? "0")
-            let stadData = (stadPayload["data"] as? [String: Any]) ?? [:]
-            if stadStatusVal == "1" && !stadData.isEmpty {
-                let (sH265Cands, sH264Cands, sClearCands) = buildCandidateArrays(stadData)
-                let stadSessionInput = (stadData["stream_session"] as? String) ?? ""
-                async let stad4KLock = resolveFirstReachableLockedHls(candidates: sH265Cands, streamSession: stadSessionInput)
-                async let stadH264Lock = resolveFirstReachableLockedHls(candidates: sH264Cands, streamSession: stadSessionInput)
-                let (sLocked4K, sLockedH264) = await (stad4KLock, stadH264Lock)
 
-                if sLocked4K.isReachable || sLockedH264.isReachable || (!locked4K.isReachable && !lockedH264.isReachable) {
-                    httpSt = stadSt
-                    statusVal = stadStatusVal
-                    streamPayload = stadPayload
-                    sdata = stadData
-                    h265Cands = sH265Cands
-                    h264Cands = sH264Cands
-                    clearCands = sClearCands
-                    streamSession = stadSessionInput
-                    locked4K = sLocked4K
-                    lockedH264 = sLockedH264
-                }
-            } else if statusVal != "1" && !stadPayload.isEmpty {
-                httpSt = stadSt
-                streamPayload = stadPayload
+            if let msg = gwPayload["msg"] as? String, !msg.isEmpty {
+                lastServerMsg = msg
             }
-        }
 
-        // 3. Dự phòng cuối qua cổng Web/Safari (/api/v7.1_w/stream/tv/...) nếu cả 2 cổng trên chưa có luồng .m3u8 phản hồi HTTP 200
-        var webPayload: [String: Any] = [:]
-        if statusVal != "1" || (!locked4K.isReachable && !lockedH264.isReachable) {
-            let (webSt, fetchedWebPayload) = (try? await requestWebJSON(
-                config: config,
-                route: "stream/tv/\(channelId)/\(autoProfile)",
-                extraQuery: streamQuery,
-                authenticated: config.isAuthenticated
-            )) ?? (500, [:])
-            webPayload = fetchedWebPayload
-            let webStatusVal = String(describing: webPayload["status"] ?? "0")
-            let webData = (webPayload["data"] as? [String: Any]) ?? [:]
-            if webStatusVal == "1" && !webData.isEmpty {
-                let (wH265Cands, wH264Cands, wClearCands) = buildCandidateArrays(webData)
-                let webSessionInput = (webData["stream_session"] as? String) ?? ""
-                async let web4KLock = resolveFirstReachableLockedHls(candidates: wH265Cands, streamSession: webSessionInput)
-                async let webH264Lock = resolveFirstReachableLockedHls(candidates: wH264Cands, streamSession: webSessionInput)
-                let (wLocked4K, wLockedH264) = await (web4KLock, webH264Lock)
+            let gwStatusVal = String(describing: gwPayload["status"] ?? "0")
+            let gwData = (gwPayload["data"] as? [String: Any]) ?? [:]
 
-                if wLocked4K.isReachable || wLockedH264.isReachable || (!locked4K.isReachable && !lockedH264.isReachable) {
-                    httpSt = webSt
-                    statusVal = webStatusVal
-                    streamPayload = webPayload
-                    sdata = webData
-                    h265Cands = wH265Cands
-                    h264Cands = wH264Cands
-                    clearCands = wClearCands
-                    streamSession = webSessionInput
-                    locked4K = wLocked4K
-                    lockedH264 = wLockedH264
+            if gwStatusVal == "1" && !gwData.isEmpty {
+                let (gH265, gH264, gClear) = buildDynamicCandidateArrays(
+                    from: gwData,
+                    isDrmContent: isDrmContent,
+                    channelOrVodId: channelId
+                )
+                let gwSession = (gwData["stream_session"] as? String) ?? ""
+                async let g4KLock = resolveFirstReachableLockedHls(candidates: gH265, streamSession: gwSession)
+                async let gH264Lock = resolveFirstReachableLockedHls(candidates: gH264, streamSession: gwSession)
+                let (res4K, resH264) = await (g4KLock, gH264Lock)
+
+                if res4K.isReachable || resH264.isReachable || (!locked4K.isReachable && !lockedH264.isReachable) {
+                    httpSt = gwSt
+                    statusVal = gwStatusVal
+                    streamPayload = gwPayload
+                    sdata = gwData
+                    h265Cands = gH265
+                    h264Cands = gH264
+                    clearCands = gClear
+                    streamSession = gwSession
+                    locked4K = res4K
+                    lockedH264 = resH264
                 }
+
+                // Nếu đã tìm thấy luồng .m3u8 sống (HTTP 200) trên cổng này, dừng ngay không cần gọi cổng dự phòng
+                if res4K.isReachable || resH264.isReachable {
+                    break
+                }
+            } else if statusVal != "1" && !gwPayload.isEmpty {
+                httpSt = gwSt
+                streamPayload = gwPayload
             }
         }
 
@@ -2942,10 +3014,7 @@ public final class FPTDirectClient {
         // hiển thị Màn Hình Tĩnh Chờ Phát Sóng (Poster sự kiện + Giờ thi đấu) giống hệt trên app điện thoại FPT Play!
         if !eventId.isEmpty && (!hasAnyStreamUrl || statusVal != "1") {
             if isUpcomingEvent || httpSt != 401 {
-                let serverMsg = (streamPayload["msg"] as? String)
-                    ?? (stadPayload["msg"] as? String)
-                    ?? (webPayload["msg"] as? String)
-                    ?? ""
+                let serverMsg = (streamPayload["msg"] as? String) ?? lastServerMsg
                 let waitMsg = !serverMsg.isEmpty
                     ? "\(serverMsg) • Lịch phát sóng: \(scheduleLabel)"
                     : "Trận đấu chưa mở luồng trực tiếp (Lịch phát sóng: \(scheduleLabel)). Màn hình sẽ tự động phát ngay khi trận đấu bắt đầu."
@@ -2979,9 +3048,7 @@ public final class FPTDirectClient {
 
         guard statusVal == "1", hasAnyStreamUrl else {
             let msg = (streamPayload["msg"] as? String)
-                ?? (stadPayload["msg"] as? String)
-                ?? (webPayload["msg"] as? String)
-                ?? "Không xin được phiên phát từ FPT Play"
+                ?? (!lastServerMsg.isEmpty ? lastServerMsg : "Không xin được phiên phát từ FPT Play")
             throw NSError(domain: "FPTDirectClient", code: -2, userInfo: [NSLocalizedDescriptionKey: msg])
         }
 

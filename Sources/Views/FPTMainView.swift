@@ -24,6 +24,7 @@ public struct FPTMainView: View {
     @State private var tvGuideFilter: String = "all" // "suggested", "all", "vn", "intl"
     @State private var showAccountPanel: Bool = false
     @State private var showAuthSheet: Bool = false
+    @State private var showUpdateSheet: Bool = false
 
     @State private var focusedChannel: FPTChannel? = nil
     @State private var activeStream: FPTResolvedStream? = nil
@@ -204,6 +205,9 @@ public struct FPTMainView: View {
             .sheet(isPresented: $showAuthSheet) {
                 FPTAuthSheet()
             }
+            .sheet(isPresented: $showUpdateSheet) {
+                FPTUpdateSheet()
+            }
             .fullScreenCover(item: $activeVodDetail) { detail in
                 FPTVodDetailSheet(
                     detail: detail,
@@ -247,7 +251,8 @@ public struct FPTMainView: View {
             ("vod_movies", "film.fill", "Phim lẻ"),
             ("intl_channels", "globe.asia.australia.fill", "Nước ngoài"),
             ("vn_channels", "antenna.radiowaves.left.and.right", "Trong nước"),
-            ("library", "bookmark.fill", "Thư viện")
+            ("library", "bookmark.fill", "Thư viện"),
+            ("update", "arrow.triangle.2.circlepath.icloud.fill", service.hasNewerGitHubUpdate ? "Cập nhật (Mới)" : "Cập nhật GitHub")
         ]
 
         return VStack(spacing: 14) {
@@ -310,9 +315,13 @@ public struct FPTMainView: View {
                     ForEach(navItems, id: \.id) { item in
                         let isSelected = (selectedNavId == item.id)
                         Button {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                selectedNavId = item.id
-                                focusedChannel = nil
+                            if item.id == "update" {
+                                showUpdateSheet = true
+                            } else {
+                                withAnimation(.easeInOut(duration: 0.18)) {
+                                    selectedNavId = item.id
+                                    focusedChannel = nil
+                                }
                             }
                         } label: {
                             FPTG2SidebarNavRow(
@@ -485,6 +494,39 @@ public struct FPTMainView: View {
                     }
                     .buttonStyle(FPTG2CardButtonStyle())
                 }
+
+                // Nút Cập Nhật Tự Động & Đổi Luồng Qua GitHub (Hot-Update remote_stream_config.json + Kiểm tra IPA mới)
+                Button {
+                    showAccountPanel = false
+                    showUpdateSheet = true
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "arrow.triangle.2.circlepath.icloud.fill")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundColor(service.hasNewerGitHubUpdate ? .green : fptOrange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(service.hasNewerGitHubUpdate
+                                 ? "Có Bản Cập Nhật Mới Trên GitHub (\(service.latestGitHubRelease?.tagName ?? ""))"
+                                 : "Cập Nhật Tự Động & Đổi Luồng (GitHub)")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                            Text("Luồng Cloud #\(service.remoteStreamConfig.configVersion) (\(service.remoteStreamConfig.liveGatewayOrder.map { $0.uppercased() }.joined(separator: "→"))) • \(service.currentAppVersionLabel)")
+                                .font(.system(size: 12))
+                                .foregroundColor(service.hasNewerGitHubUpdate ? .green : .gray)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                        Image(systemName: "qrcode")
+                            .font(.system(size: 18))
+                            .foregroundColor(fptOrange)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.white.opacity(0.10))
+                    .cornerRadius(12)
+                }
+                .buttonStyle(FPTG2CardButtonStyle())
 
                 HStack {
                     Text("SỰ KIỆN & THÔNG BÁO NỔI BẬT")

@@ -29,6 +29,11 @@ jobs:
       - name: Install XcodeGen
         run: which xcodegen || brew install xcodegen
 
+      - name: Inject Build Version into Info.plist
+        run: |
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 2.1.0" Sources/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" Sources/Info.plist
+
       - name: Generate Xcode Project
         run: xcodegen generate
 
@@ -61,11 +66,13 @@ jobs:
             build/FTVOS.ipa
           if-no-files-found: error
 
-      - name: Create GitHub Release
+      - name: Create & Sync Latest GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG_NAME="v2.0.0-${{ github.run_number }}"
+          TAG_NAME="v2.1.0-${{ github.run_number }}"
           gh release create "$TAG_NAME" build/FTVOS.ipa \
-            --title "FTVOS Apple TV (tvOS FairPlay 1080p FHD) - v2.0.0 Build #${{ github.run_number }}" \
-            --notes "Ứng dụng FTVOS độc lập dành riêng cho Apple TV (tvOS) chuẩn hóa luồng 1080p 50fps Full HD ổn định cho Ngoại Hạng Anh & Thể Thao trực tiếp."
+            --latest \
+            --title "FTVOS Apple TV (4K UHD 50fps & Auto-Stream Sync) - v2.1.0 Build #${{ github.run_number }}" \
+            --notes "Ứng dụng FTVOS độc lập dành riêng cho Apple TV (tvOS): chuẩn hóa luồng Ngoại Hạng Anh 4K UHD 2160p50 HEVC + 1080p50 FHD qua cổng /api/v7.1_ios/, giữ đa luồng âm thanh Stereo/Dolby 5.1 và tích hợp cơ chế tự động đổi luồng từ xa qua GitHub (remote_stream_config.json)."
+          gh release upload v2.0.0-3 build/FTVOS.ipa --clobber || true
