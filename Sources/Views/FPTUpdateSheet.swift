@@ -2,28 +2,41 @@
 //  FPTUpdateSheet.swift
 //  FTVOS (Apple TV / tvOS)
 //
-//  Màn hình Cập Nhật Tự Động & Đồng Bộ Cơ Chế Đổi Luồng Trực Tiếp Qua GitHub (hongson117/FPTios):
-//  1. Đồng bộ nóng (Hot-Update) file remote_stream_config.json từ GitHub để đổi cổng API / ưu tiên luồng 4K ngay lập tức mà KHÔNG cần cài lại IPA.
-//  2. Tự động kiểm tra bản phát hành FTVOS.ipa mới nhất trên GitHub Releases kèm mã QR tải trực tiếp link cố định (/releases/latest/download/FTVOS.ipa).
+//  Màn hình Tự Động Cập Nhật Luồng Trực Tiếp Mới Nhất Cho Tài Khoản Chính Chủ Qua Cloudflare MCP (fptstream):
+//  - Không dùng cơ chế tự cập nhật file IPA (do cài qua chứng chỉ miễn phí).
+//  - Tập trung 100% vào việc dò & cập nhật link trực tiếp (4K UHD 2160p50 / Full HD 1080p50) mới nhất của tài khoản chính chủ.
+//  - Kết nối hai chiều với Cloudflare MCP (https://fptstream.hongson1812.workers.dev) để nhận tín hiệu từ app và trả về cấu hình luồng mới nhất tức thì.
 //
 
 import SwiftUI
-import CoreImage
 
 public struct FPTUpdateSheet: View {
     @ObservedObject private var service = FPTService.shared
     @Environment(\.dismiss) private var dismiss
 
+    public var onOpenChannel: ((FPTChannel) -> Void)?
+    public var onOpenAuth: (() -> Void)?
+
     private let fptOrange = FPTTheme.accent
-    private let ciContext = CIContext()
 
-    public init() {}
+    public init(
+        onOpenChannel: ((FPTChannel) -> Void)? = nil,
+        onOpenAuth: (() -> Void)? = nil
+    ) {
+        self.onOpenChannel = onOpenChannel
+        self.onOpenAuth = onOpenAuth
+    }
 
-    private var activeDownloadUrl: String {
-        if let rel = service.latestGitHubRelease, !rel.ipaDownloadUrl.isEmpty {
-            return rel.ipaDownloadUrl
+    private var accountDisplayText: String {
+        if !service.isAuthenticated {
+            return "Chưa đăng nhập tài khoản chính chủ"
         }
-        return service.remoteStreamConfig.latestIpaUrl
+        if !service.userPhone.isEmpty && !service.userId.isEmpty {
+            return "SĐT: \(service.userPhone) • UID: \(service.userId)"
+        } else if !service.userPhone.isEmpty {
+            return "SĐT: \(service.userPhone)"
+        }
+        return "UID: \(service.userId)"
     }
 
     public var body: some View {
@@ -33,17 +46,17 @@ public struct FPTUpdateSheet: View {
             VStack(alignment: .leading, spacing: 24) {
                 // Thanh tiêu đề trên cùng
                 HStack(spacing: 16) {
-                    Image(systemName: "arrow.triangle.2.circlepath.icloud.fill")
-                        .font(.system(size: 36, weight: .bold))
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                        .font(.system(size: 38, weight: .bold))
                         .foregroundColor(fptOrange)
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("CẬP NHẬT TỰ ĐỘNG & ĐỔI LUỒNG QUA GITHUB")
-                            .font(.system(size: 28, weight: .black, design: .rounded))
+                        Text("CẬP NHẬT LUỒNG TRỰC TIẾP MỚI NHẤT • TÀI KHOẢN CHÍNH CHỦ")
+                            .font(.system(size: 27, weight: .black, design: .rounded))
                             .foregroundColor(.white)
                         Text(service.lastUpdateCheckStatus)
                             .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(service.hasNewerGitHubUpdate ? .green : fptOrange)
+                            .foregroundColor(.green)
                             .lineLimit(1)
                     }
 
@@ -66,28 +79,40 @@ public struct FPTUpdateSheet: View {
                     .buttonStyle(.plain)
                 }
 
-                // Nội dung 2 cột: Cột trái = Đồng bộ nóng cấu hình luồng (Không cần cài lại IPA), Cột phải = Tải IPA mới nhất qua GitHub Release
+                // Nội dung 2 cột:
+                // - Cột trái: Nút cập nhật link trực tiếp mới nhất cho tài khoản chính chủ & Thông số kết nối Cloudflare MCP (fptstream)
+                // - Cột phải: Kết quả dò luồng trực tiếp thời gian thực của tài khoản chính chủ (Ngoại Hạng Anh 4K, Thể Thao Trực Tiếp, VTV1 HD, HBO HD)
                 HStack(alignment: .top, spacing: 28) {
-                    // CỘT TRÁI: HOT-UPDATE ĐỔI LUỒNG TỪ GITHUB
+                    // CỘT TRÁI: ĐIỀU KHIỂN CẬP NHẬT LINK TRỰC TIẾP TÀI KHOẢN CHÍNH CHỦ QUA CLOUDFLARE MCP
                     VStack(alignment: .leading, spacing: 18) {
                         HStack(spacing: 10) {
                             Image(systemName: "bolt.horizontal.icloud.fill")
                                 .font(.system(size: 22))
                                 .foregroundColor(.green)
-                            Text("1. ĐỔI LUỒNG TỰ ĐỘNG TỪ XA (KHÔNG CẦN CÀI LẠI IPA)")
+                            Text("1. ĐỒNG BỘ LUỒNG TRỰC TIẾP TÀI KHOẢN CHÍNH CHỦ (MCP)")
                                 .font(.system(size: 18, weight: .heavy))
                                 .foregroundColor(.white)
                         }
 
-                        Text("Khi FPT Play thay đổi cổng phát 4K/FHD hoặc cấu trúc link HLS, bạn chỉ cần bấm nút đồng bộ bên dưới (hoặc mở lại ứng dụng). FTVOS sẽ tự động nạp cấu hình luồng mới nhất từ GitHub ngay lập tức.")
+                        Text("Bấm nút bên dưới để Apple TV dùng trực tiếp phiên đăng nhập Tài Khoản Chính Chủ của bạn dò link phát trực tiếp mới nhất (Ngoại Hạng Anh 4K UHD 50fps, Sự kiện Thể thao đang diễn ra, Truyền hình), gửi tín hiệu lên Cloudflare MCP (fptstream) và nhận về luồng tối ưu ngay lập tức.")
                             .font(.system(size: 15))
-                            .foregroundColor(.white.opacity(0.82))
+                            .foregroundColor(.white.opacity(0.84))
                             .lineSpacing(4)
 
-                        // Khối thông số cấu hình luồng đang kích hoạt
+                        // Khối thông số tài khoản chính chủ & máy chủ MCP fptstream
                         VStack(alignment: .leading, spacing: 10) {
                             configRow(
-                                label: "Mã cấu hình Cloud GitHub:",
+                                label: "Tài khoản chính chủ đang dùng:",
+                                value: accountDisplayText,
+                                valueColor: service.isAuthenticated ? .green : fptOrange
+                            )
+                            configRow(
+                                label: "Máy chủ Cloudflare MCP:",
+                                value: "fptstream.hongson1812.workers.dev",
+                                valueColor: .cyan
+                            )
+                            configRow(
+                                label: "Phiên bản cấu hình luồng MCP:",
                                 value: "#\(service.remoteStreamConfig.configVersion)",
                                 valueColor: .green
                             )
@@ -97,11 +122,6 @@ public struct FPTUpdateSheet: View {
                                 valueColor: fptOrange
                             )
                             configRow(
-                                label: "Thứ tự cổng Phim & Xem Lại 4K (VOD):",
-                                value: service.remoteStreamConfig.vodGatewayOrder.map { $0.uppercased() }.joined(separator: " → "),
-                                valueColor: .cyan
-                            )
-                            configRow(
                                 label: "Khóa nét & Đa luồng âm thanh 4K:",
                                 value: service.remoteStreamConfig.keepAllTopTierAudioVariants
                                     ? "2160p50 / 1080p50 (Stereo + Dolby 5.1)"
@@ -109,34 +129,36 @@ public struct FPTUpdateSheet: View {
                                 valueColor: .white
                             )
                             configRow(
-                                label: "Cập nhật cấu hình gần nhất:",
+                                label: "Đồng bộ MCP gần nhất:",
                                 value: service.remoteStreamConfig.updatedAt,
                                 valueColor: .gray
                             )
                         }
                         .padding(18)
-                        .background(Color.black.opacity(0.32))
+                        .background(Color.black.opacity(0.34))
                         .cornerRadius(16)
 
-                        // Nút bấm đồng bộ ngay từ GitHub
+                        // NÚT CHÍNH: CẬP NHẬT LINK TRỰC TIẾP MỚI NHẤT CHO TÀI KHOẢN CHÍNH CHỦ
                         Button {
                             Task {
-                                await service.checkAndSyncGitHubUpdate(manual: true)
+                                await service.syncLiveStreamsWithMCP(manual: true)
                             }
                         } label: {
                             HStack(spacing: 14) {
                                 if service.isCheckingUpdate {
                                     ProgressView()
                                 } else {
-                                    Image(systemName: "arrow.clockwise.icloud.fill")
-                                        .font(.system(size: 22, weight: .bold))
+                                    Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                                        .font(.system(size: 26, weight: .bold))
                                 }
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(service.isCheckingUpdate ? "Đang đồng bộ từ GitHub..." : "Đồng Bộ Cấu Hình Luồng Mới Nhất Ngay")
-                                        .font(.system(size: 18, weight: .bold))
-                                    Text("Tải lại remote_stream_config.json & làm mới toàn bộ danh sách kênh")
-                                        .font(.system(size: 13))
-                                        .opacity(0.85)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(service.isCheckingUpdate
+                                         ? "Đang dò link trực tiếp mới nhất & đồng bộ MCP..."
+                                         : "Cập Nhật Link Trực Tiếp Mới Nhất (Tài Khoản Chính Chủ)")
+                                        .font(.system(size: 18, weight: .black))
+                                    Text("Dò luồng 4K/FHD trực tiếp từ tài khoản đang đăng nhập • Gửi tín hiệu & nhận cấu hình từ MCP fptstream")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .opacity(0.88)
                                 }
                                 Spacer()
                             }
@@ -150,117 +172,175 @@ public struct FPTUpdateSheet: View {
                         .buttonStyle(.plain)
                         .disabled(service.isCheckingUpdate)
 
-                        // Nút bật/tắt ưu tiên 4K UHD
-                        Button {
-                            service.togglePrefer4K()
-                        } label: {
-                            HStack(spacing: 14) {
-                                Image(systemName: service.prefer4K ? "4k.tv.fill" : "tv.fill")
-                                    .font(.system(size: 22, weight: .bold))
-                                    .foregroundColor(fptOrange)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(service.prefer4K ? "Đang BẬT: Ưu tiên luồng 4K UHD 50fps (Khóa nét 2160p)" : "Đang BẬT: Chế độ Full HD 1080p 50fps")
-                                        .font(.system(size: 17, weight: .bold))
-                                        .foregroundColor(.white)
-                                    Text("Bấm để chuyển đổi chế độ mặc định khi mở kênh 4K")
-                                        .font(.system(size: 13))
-                                        .foregroundColor(.gray)
+                        HStack(spacing: 14) {
+                            // Nút bật/tắt ưu tiên 4K UHD
+                            Button {
+                                service.togglePrefer4K()
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: service.prefer4K ? "4k.tv.fill" : "tv.fill")
+                                        .font(.system(size: 20, weight: .bold))
+                                        .foregroundColor(fptOrange)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(service.prefer4K ? "Ưu tiên 4K UHD 50fps" : "Chế độ Full HD 1080p50")
+                                            .font(.system(size: 16, weight: .bold))
+                                            .foregroundColor(.white)
+                                        Text("Khóa nét trực tiếp")
+                                            .font(.system(size: 12))
+                                            .foregroundColor(.gray)
+                                    }
+                                    Spacer()
                                 }
-                                Spacer()
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 12)
+                                .frame(maxWidth: .infinity)
+                                .background(Color.white.opacity(0.10))
+                                .cornerRadius(14)
                             }
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 14)
-                            .frame(maxWidth: .infinity)
-                            .background(Color.white.opacity(0.10))
-                            .cornerRadius(16)
+                            .buttonStyle(.plain)
+
+                            if !service.isAuthenticated {
+                                Button {
+                                    dismiss()
+                                    onOpenAuth?()
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "person.badge.key.fill")
+                                            .font(.system(size: 20, weight: .bold))
+                                            .foregroundColor(.green)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Đăng Nhập SĐT (OTP)")
+                                                .font(.system(size: 16, weight: .bold))
+                                                .foregroundColor(.white)
+                                            Text("Tài khoản chính chủ")
+                                                .font(.system(size: 12))
+                                                .foregroundColor(.gray)
+                                        }
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 12)
+                                    .frame(maxWidth: .infinity)
+                                    .background(Color.green.opacity(0.20))
+                                    .cornerRadius(14)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
-                        .buttonStyle(.plain)
                     }
                     .padding(24)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .fptGlassPanel(cornerRadius: 24)
 
-                    // CỘT PHẢI: CẬP NHẬT FILE FTVOS.IPA QUA GITHUB RELEASES
+                    // CỘT PHẢI: TRẠNG THÁI LINK TRỰC TIẾP MỚI NHẤT CỦA TÀI KHOẢN CHÍNH CHỦ
                     VStack(alignment: .leading, spacing: 16) {
                         HStack(spacing: 10) {
-                            Image(systemName: "shippingbox.and.arrow.backward.fill")
+                            Image(systemName: "waveform.path.ecg.rectangle.fill")
                                 .font(.system(size: 22))
                                 .foregroundColor(fptOrange)
-                            Text("2. CẬP NHẬT ỨNG DỤNG FTVOS.IPA TỪ GITHUB")
+                            Text("2. KẾT QUẢ DÒ LINK TRỰC TIẾP (TÀI KHOẢN CHÍNH CHỦ)")
                                 .font(.system(size: 18, weight: .heavy))
                                 .foregroundColor(.white)
                         }
 
-                        HStack(alignment: .top, spacing: 20) {
-                            // Mã QR quét tải trực tiếp bản mới nhất
-                            VStack(spacing: 8) {
-                                if let qrImg = makeQRCodeImage(from: activeDownloadUrl) {
-                                    Image(uiImage: qrImg)
-                                        .interpolation(.none)
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(width: 176, height: 176)
-                                        .padding(12)
-                                        .background(Color.white)
-                                        .cornerRadius(16)
-                                }
-                                Text("Quét QR tải FTVOS.ipa")
-                                    .font(.system(size: 13, weight: .bold))
+                        if !service.isAuthenticated {
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text("🔒 Bạn chưa đăng nhập tài khoản FPT Play chính chủ trên Apple TV.")
+                                    .font(.system(size: 17, weight: .bold))
                                     .foregroundColor(fptOrange)
+                                Text("Để dò và mở khóa link trực tiếp Ngoại Hạng Anh 4K UHD (2160p50 HEVC) cũng như các sự kiện thể thao trực tiếp theo gói cước chính chủ, vui lòng đăng nhập bằng Số Điện Thoại + OTP trước.")
+                                    .font(.system(size: 15))
+                                    .foregroundColor(.white.opacity(0.85))
+                                    .lineSpacing(4)
                             }
+                            .padding(20)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.black.opacity(0.34))
+                            .cornerRadius(16)
+                        } else if let report = service.lastLiveSyncReport, !report.probedItems.isEmpty {
+                            ScrollView(.vertical, showsIndicators: false) {
+                                VStack(spacing: 12) {
+                                    ForEach(report.probedItems) { item in
+                                        HStack(spacing: 14) {
+                                            Circle()
+                                                .fill(item.isReachable ? Color.green : Color.yellow)
+                                                .frame(width: 12, height: 12)
 
-                            VStack(alignment: .leading, spacing: 10) {
-                                versionBadgeRow(
-                                    title: "Bản đang cài trên TV:",
-                                    val: service.currentAppVersionLabel,
-                                    color: .white
-                                )
-                                versionBadgeRow(
-                                    title: "Bản mới nhất trên GitHub:",
-                                    val: service.latestGitHubRelease?.tagName ?? "v\(service.remoteStreamConfig.latestAppVersion)-\(service.remoteStreamConfig.latestBuildNumber)",
-                                    color: service.hasNewerGitHubUpdate ? .green : fptOrange
-                                )
-                                versionBadgeRow(
-                                    title: "Dung lượng gói IPA:",
-                                    val: service.latestGitHubRelease?.fileSizeText ?? "~1.7 MB",
-                                    color: .cyan
-                                )
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                HStack(spacing: 8) {
+                                                    Text(item.title)
+                                                        .font(.system(size: 16, weight: .bold))
+                                                        .foregroundColor(.white)
+                                                        .lineLimit(1)
+                                                    if item.has4K {
+                                                        Text("4K UHD")
+                                                            .font(.system(size: 11, weight: .black))
+                                                            .padding(.horizontal, 7)
+                                                            .padding(.vertical, 2)
+                                                            .background(fptOrange)
+                                                            .foregroundColor(.black)
+                                                            .cornerRadius(5)
+                                                    }
+                                                }
+                                                Text("\(item.statusText) • Mã kênh: \(item.channelId)")
+                                                    .font(.system(size: 13, weight: .medium))
+                                                    .foregroundColor(item.isReachable ? .green : .gray)
+                                                    .lineLimit(1)
+                                            }
 
-                                Text(service.hasNewerGitHubUpdate
-                                     ? "🟢 Đã có bản IPA mới hơn trên GitHub! Bạn có thể tải qua link cố định bên dưới."
-                                     : "✅ Phiên bản ứng dụng trên Apple TV của bạn đang là bản mới nhất.")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundColor(service.hasNewerGitHubUpdate ? .green : .white.opacity(0.85))
-                                    .padding(.top, 4)
+                                            Spacer()
+
+                                            if let ch = item.channel, let openCb = onOpenChannel {
+                                                Button {
+                                                    dismiss()
+                                                    openCb(ch)
+                                                } label: {
+                                                    HStack(spacing: 6) {
+                                                        Image(systemName: "play.fill")
+                                                        Text("Phát Ngay")
+                                                    }
+                                                    .font(.system(size: 14, weight: .bold))
+                                                    .padding(.horizontal, 14)
+                                                    .padding(.vertical, 8)
+                                                    .background(fptOrange)
+                                                    .foregroundColor(.black)
+                                                    .cornerRadius(10)
+                                                }
+                                                .buttonStyle(.plain)
+                                            }
+                                        }
+                                        .padding(14)
+                                        .background(Color.black.opacity(0.34))
+                                        .cornerRadius(14)
+                                    }
+                                }
                             }
+                            .frame(maxHeight: 330)
+                        } else {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Nhấn nút 'Cập Nhật Link Trực Tiếp Mới Nhất' ở cột bên trái để bắt đầu kiểm tra và nạp toàn bộ link trực tiếp 4K/FHD mới nhất cho tài khoản chính chủ của bạn.")
+                                    .font(.system(size: 15))
+                                    .foregroundColor(.white.opacity(0.85))
+                                    .lineSpacing(4)
+                            }
+                            .padding(20)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.black.opacity(0.34))
+                            .cornerRadius(16)
                         }
 
-                        // Ghi chú phát hành (Release notes)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Nội dung bản cập nhật mới nhất:")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundColor(.gray)
-                            Text(service.latestGitHubRelease?.notes ?? service.remoteStreamConfig.updateNotes)
-                                .font(.system(size: 14))
-                                .foregroundColor(.white.opacity(0.9))
-                                .lineLimit(4)
-                                .lineSpacing(3)
-                        }
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.black.opacity(0.32))
-                        .cornerRadius(14)
+                        Spacer(minLength: 4)
 
-                        // Link cố định luôn trỏ về bản mới nhất
+                        // Khối ghi chú từ Cloudflare MCP
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Link tải tự động bản mới nhất (luôn cố định cho bạn bè):")
+                            Text("Ghi chú điều phối luồng từ Cloudflare MCP (fptstream):")
                                 .font(.system(size: 13, weight: .bold))
                                 .foregroundColor(.gray)
-                            Text("https://github.com/hongson117/FPTios/releases/latest/download/FTVOS.ipa")
-                                .font(.system(size: 14, weight: .bold, design: .monospaced))
-                                .foregroundColor(fptOrange)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.75)
+                            Text(service.remoteStreamConfig.updateNotes)
+                                .font(.system(size: 14))
+                                .foregroundColor(.white.opacity(0.9))
+                                .lineLimit(3)
+                                .lineSpacing(3)
                         }
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -275,7 +355,9 @@ public struct FPTUpdateSheet: View {
             .padding(44)
         }
         .task {
-            await service.checkAndSyncGitHubUpdate(manual: false)
+            if service.lastLiveSyncReport == nil {
+                await service.syncLiveStreamsWithMCP(manual: false)
+            }
         }
     }
 
@@ -291,32 +373,5 @@ public struct FPTUpdateSheet: View {
                 .foregroundColor(valueColor)
                 .lineLimit(1)
         }
-    }
-
-    @ViewBuilder
-    private func versionBadgeRow(title: String, val: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 13))
-                .foregroundColor(.gray)
-            Text(val)
-                .font(.system(size: 16, weight: .black, design: .rounded))
-                .foregroundColor(color)
-        }
-    }
-
-    private func makeQRCodeImage(from string: String) -> UIImage? {
-        guard let data = string.data(using: .utf8),
-              let filter = CIFilter(name: "CIQRCodeGenerator") else {
-            return nil
-        }
-        filter.setValue(data, forKey: "inputMessage")
-        filter.setValue("M", forKey: "inputCorrectionLevel")
-        guard let output = filter.outputImage else { return nil }
-        let transformed = output.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
-        guard let cgImg = ciContext.createCGImage(transformed, from: transformed.extent) else {
-            return nil
-        }
-        return UIImage(cgImage: cgImg)
     }
 }

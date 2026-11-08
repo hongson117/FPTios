@@ -36,20 +36,11 @@ public final class FPTService: ObservableObject {
     @Published public var isLoadingCatalog: Bool = false
     @Published public var logs: [String] = []
 
-    // Trạng thái Cập Nhật Tự Động & Đổi Luồng Động Qua GitHub (hongson117/FPTios)
+    // Trạng thái Tự Động Cập Nhật Luồng Trực Tiếp Cho Tài Khoản Chính Chủ Qua Cloudflare MCP (fptstream)
     @Published public var remoteStreamConfig: FPTRemoteStreamConfig = FPTDirectClient.shared.remoteStreamConfig
-    @Published public var latestGitHubRelease: FPTGitHubReleaseInfo? = nil
+    @Published public var lastLiveSyncReport: FPTLiveStreamSyncReport? = nil
     @Published public var isCheckingUpdate: Bool = false
-    @Published public var lastUpdateCheckStatus: String = "Tự động đồng bộ cấu hình luồng từ GitHub"
-
-    public var currentAppVersionLabel: String {
-        let (ver, build) = FPTDirectClient.currentAppVersionAndBuild()
-        return "v\(ver) (Build #\(build))"
-    }
-
-    public var hasNewerGitHubUpdate: Bool {
-        latestGitHubRelease?.hasNewerBinary ?? false
-    }
+    @Published public var lastUpdateCheckStatus: String = "Sẵn sàng đồng bộ link trực tiếp mới nhất từ Cloudflare MCP (fptstream)"
 
     public private(set) var bootstrapConfig: FPTBootstrapConfig
 
@@ -106,31 +97,32 @@ public final class FPTService: ObservableObject {
     }
 
     public func refreshAll(forceEvents: Bool = false) async {
-        await checkAndSyncGitHubUpdate(manual: false)
+        let cfg = await FPTDirectClient.shared.syncRemoteStreamConfig()
+        self.remoteStreamConfig = cfg
         await fetchCatalog(forceEvents: forceEvents)
+        await syncLiveStreamsWithMCP(manual: false)
         if bootstrapConfig.isAuthenticated {
             await fetchLoggedInDevices()
         }
     }
 
-    public func checkAndSyncGitHubUpdate(manual: Bool = false) async {
+    public func syncLiveStreamsWithMCP(manual: Bool = false) async {
         isCheckingUpdate = true
         defer { isCheckingUpdate = false }
         if manual {
-            lastUpdateCheckStatus = "Đang kiểm tra bản cập nhật & đồng bộ cấu hình đổi luồng từ GitHub..."
-            appendLog("🔄 Đang đồng bộ remote_stream_config.json & kiểm tra Release mới trên GitHub...")
+            lastUpdateCheckStatus = "Đang dò & cập nhật link trực tiếp mới nhất cho tài khoản chính chủ với Cloudflare MCP (fptstream)..."
+            appendLog("🔄 Đang dò link trực tiếp 4K/FHD mới nhất cho tài khoản chính chủ & đồng bộ hai chiều với Cloudflare MCP (fptstream)...")
         }
-        let (cfg, releaseInfo) = await FPTDirectClient.shared.checkGitHubReleaseAndConfig()
+        let liveList = categories.first(where: { $0.id == "live_football" })?.channels ?? []
+        let (cfg, report) = await FPTDirectClient.shared.probeAndSyncLiveStreamsWithMCP(
+            config: bootstrapConfig,
+            activeLiveChannels: liveList,
+            manualTrigger: manual
+        )
         self.remoteStreamConfig = cfg
-        self.latestGitHubRelease = releaseInfo
-        let gwSummary = cfg.liveGatewayOrder.joined(separator: " → ").uppercased()
-        if releaseInfo.hasNewerBinary {
-            self.lastUpdateCheckStatus = "🎉 Có bản FTVOS mới trên GitHub (\(releaseInfo.tagName)) • Luồng động #\(cfg.configVersion) (\(gwSummary)) đã kích hoạt!"
-            appendLog("🎉 Phát hiện bản cập nhật mới trên GitHub: \(releaseInfo.tagName) • Đã áp dụng cấu hình luồng #\(cfg.configVersion) (\(gwSummary))")
-        } else {
-            self.lastUpdateCheckStatus = "✅ Đang ở bản mới nhất (\(releaseInfo.tagName)) • Cấu hình luồng GitHub #\(cfg.configVersion) (\(gwSummary)) đã đồng bộ"
-            appendLog("☁️ Đã đồng bộ cấu hình luồng GitHub #\(cfg.configVersion) (Thứ tự cổng Live: \(gwSummary))")
-        }
+        self.lastLiveSyncReport = report
+        self.lastUpdateCheckStatus = report.summaryMessage
+        appendLog(report.summaryMessage)
         if manual {
             await fetchCatalog(forceEvents: true)
         }
@@ -436,6 +428,7 @@ public final class FPTService: ObservableObject {
                 self.statusMessage = "🟢 Đã đăng nhập FTVOS (\(phoneLabel))"
                 appendLog("✅ Đăng nhập FPT Play VIP trực tiếp trên Apple TV thành công (\(phoneLabel))!")
                 await fetchCatalog(forceEvents: true)
+                await syncLiveStreamsWithMCP(manual: true)
                 await fetchLoggedInDevices()
             } else {
                 self.statusMessage = status.message ?? statusMessage
@@ -466,6 +459,7 @@ public final class FPTService: ObservableObject {
                 self.statusMessage = "🟢 Đã đăng nhập FTVOS (\(phoneLabel))"
                 appendLog("✅ Đã gỡ thiết bị cũ và đăng nhập thành công (\(phoneLabel))!")
                 await fetchCatalog(forceEvents: true)
+                await syncLiveStreamsWithMCP(manual: true)
                 await fetchLoggedInDevices()
             } else {
                 self.statusMessage = status.message ?? statusMessage
@@ -504,6 +498,7 @@ public final class FPTService: ObservableObject {
         self.userId = ""
         self.userPhone = ""
         self.loggedInDevices = []
+        self.lastLiveSyncReport = nil
         self.phoneAuth = FPTPhoneAuthStatus(
             stage: "idle",
             message: "Đã đăng xuất hoàn toàn. Nhập số điện thoại 10 số ở bên dưới để đăng nhập tài khoản mới."

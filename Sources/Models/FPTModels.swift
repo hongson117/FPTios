@@ -552,14 +552,10 @@ public struct FPTResolvedStream: Codable, Identifiable {
     }
 }
 
-// MARK: - Cấu Hình Đổi Luồng Động & Cập Nhật Tự Động Qua GitHub (remote_stream_config.json)
+// MARK: - Cấu Hình Điều Phối Luồng Trực Tiếp Tự Động Qua Cloudflare MCP (ftvos-stream-mcp)
 public struct FPTRemoteStreamConfig: Codable, Equatable {
     public var configVersion: Int
     public var updatedAt: String
-    public var latestAppVersion: String
-    public var latestBuildNumber: Int
-    public var latestIpaUrl: String
-    public var releasePageUrl: String
     public var updateNotes: String
     public var liveGatewayOrder: [String]
     public var vodGatewayOrder: [String]
@@ -572,14 +568,11 @@ public struct FPTRemoteStreamConfig: Codable, Equatable {
     public var keepAllTopTierAudioVariants: Bool
     public var enableDashToHlsFallback: Bool
     public var channelDirectOverrides: [String: [String: String]]
+    public var extraLiveChannels: [FPTChannel]
 
     enum CodingKeys: String, CodingKey {
         case configVersion = "config_version"
         case updatedAt = "updated_at"
-        case latestAppVersion = "latest_app_version"
-        case latestBuildNumber = "latest_build_number"
-        case latestIpaUrl = "latest_ipa_url"
-        case releasePageUrl = "release_page_url"
         case updateNotes = "update_notes"
         case liveGatewayOrder = "live_gateway_order"
         case vodGatewayOrder = "vod_gateway_order"
@@ -592,17 +585,68 @@ public struct FPTRemoteStreamConfig: Codable, Equatable {
         case keepAllTopTierAudioVariants = "keep_all_top_tier_audio_variants"
         case enableDashToHlsFallback = "enable_dash_to_hls_fallback"
         case channelDirectOverrides = "channel_direct_overrides"
+        case extraLiveChannels = "extra_live_channels"
+    }
+
+    public init(
+        configVersion: Int,
+        updatedAt: String,
+        updateNotes: String,
+        liveGatewayOrder: [String],
+        vodGatewayOrder: [String],
+        channelGatewayOverrides: [String: [String]],
+        h265DrmKeys: [String],
+        h265ClearKeys: [String],
+        h264DrmKeys: [String],
+        h264ClearKeys: [String],
+        iosExtraQuery: [String: String],
+        keepAllTopTierAudioVariants: Bool,
+        enableDashToHlsFallback: Bool,
+        channelDirectOverrides: [String: [String: String]],
+        extraLiveChannels: [FPTChannel] = []
+    ) {
+        self.configVersion = configVersion
+        self.updatedAt = updatedAt
+        self.updateNotes = updateNotes
+        self.liveGatewayOrder = liveGatewayOrder
+        self.vodGatewayOrder = vodGatewayOrder
+        self.channelGatewayOverrides = channelGatewayOverrides
+        self.h265DrmKeys = h265DrmKeys
+        self.h265ClearKeys = h265ClearKeys
+        self.h264DrmKeys = h264DrmKeys
+        self.h264ClearKeys = h264ClearKeys
+        self.iosExtraQuery = iosExtraQuery
+        self.keepAllTopTierAudioVariants = keepAllTopTierAudioVariants
+        self.enableDashToHlsFallback = enableDashToHlsFallback
+        self.channelDirectOverrides = channelDirectOverrides
+        self.extraLiveChannels = extraLiveChannels
+    }
+
+    public init(from decoder: Decoder) throws {
+        let def = Self.defaultConfig()
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.configVersion = (try? c.decode(Int.self, forKey: .configVersion)) ?? def.configVersion
+        self.updatedAt = (try? c.decode(String.self, forKey: .updatedAt)) ?? def.updatedAt
+        self.updateNotes = (try? c.decode(String.self, forKey: .updateNotes)) ?? def.updateNotes
+        self.liveGatewayOrder = (try? c.decode([String].self, forKey: .liveGatewayOrder)) ?? def.liveGatewayOrder
+        self.vodGatewayOrder = (try? c.decode([String].self, forKey: .vodGatewayOrder)) ?? def.vodGatewayOrder
+        self.channelGatewayOverrides = (try? c.decode([String: [String]].self, forKey: .channelGatewayOverrides)) ?? def.channelGatewayOverrides
+        self.h265DrmKeys = (try? c.decode([String].self, forKey: .h265DrmKeys)) ?? def.h265DrmKeys
+        self.h265ClearKeys = (try? c.decode([String].self, forKey: .h265ClearKeys)) ?? def.h265ClearKeys
+        self.h264DrmKeys = (try? c.decode([String].self, forKey: .h264DrmKeys)) ?? def.h264DrmKeys
+        self.h264ClearKeys = (try? c.decode([String].self, forKey: .h264ClearKeys)) ?? def.h264ClearKeys
+        self.iosExtraQuery = (try? c.decode([String: String].self, forKey: .iosExtraQuery)) ?? def.iosExtraQuery
+        self.keepAllTopTierAudioVariants = (try? c.decode(Bool.self, forKey: .keepAllTopTierAudioVariants)) ?? def.keepAllTopTierAudioVariants
+        self.enableDashToHlsFallback = (try? c.decode(Bool.self, forKey: .enableDashToHlsFallback)) ?? def.enableDashToHlsFallback
+        self.channelDirectOverrides = (try? c.decode([String: [String: String]].self, forKey: .channelDirectOverrides)) ?? def.channelDirectOverrides
+        self.extraLiveChannels = (try? c.decode([FPTChannel].self, forKey: .extraLiveChannels)) ?? []
     }
 
     public static func defaultConfig() -> FPTRemoteStreamConfig {
         return FPTRemoteStreamConfig(
-            configVersion: 2026110801,
-            updatedAt: "2026-11-08T08:00:00+07:00",
-            latestAppVersion: "2.1.0",
-            latestBuildNumber: 6,
-            latestIpaUrl: "https://github.com/hongson117/FPTios/releases/latest/download/FTVOS.ipa",
-            releasePageUrl: "https://github.com/hongson117/FPTios/releases/latest",
-            updateNotes: "Cập nhật luồng Ngoại Hạng Anh 4K UHD 50fps qua cổng Apple (/api/v7.1_ios/) & tự động đồng bộ cấu hình đổi luồng từ GitHub.",
+            configVersion: 2026110802,
+            updatedAt: "2026-11-08T08:20:00+07:00",
+            updateNotes: "Cấu hình luồng trực tiếp FPT Play cho tài khoản chính chủ qua Cloudflare MCP (Ưu tiên cổng Apple /api/v7.1_ios/ cho Ngoại Hạng Anh 4K UHD 50fps & tự động dò luồng trực tiếp).",
             liveGatewayOrder: ["ios", "stad", "web"],
             vodGatewayOrder: ["ios", "web", "stad"],
             channelGatewayOverrides: [
@@ -666,41 +710,80 @@ public struct FPTRemoteStreamConfig: Codable, Equatable {
             ],
             keepAllTopTierAudioVariants: true,
             enableDashToHlsFallback: true,
-            channelDirectOverrides: [:]
+            channelDirectOverrides: [:],
+            extraLiveChannels: []
         )
     }
 }
 
-public struct FPTGitHubReleaseInfo: Codable, Equatable {
-    public let tagName: String
+public struct FPTLiveStreamProbeItem: Codable, Equatable, Identifiable {
+    public var id: String { "\(channelId)_\(eventId)" }
+    public let channelId: String
+    public let eventId: String
     public let title: String
-    public let notes: String
-    public let publishedAt: String
-    public let ipaDownloadUrl: String
-    public let htmlUrl: String
-    public let fileSizeText: String
-    public let hasNewerBinary: Bool
-    public let remoteConfigVersion: Int
+    public let winningGateway: String
+    public let isReachable: Bool
+    public let has4K: Bool
+    public let hasFhd: Bool
+    public let resolutionLabel: String
+    public let statusText: String
+    public let channel: FPTChannel?
 
     public init(
-        tagName: String,
+        channelId: String,
+        eventId: String = "",
         title: String,
-        notes: String,
-        publishedAt: String,
-        ipaDownloadUrl: String,
-        htmlUrl: String,
-        fileSizeText: String,
-        hasNewerBinary: Bool,
-        remoteConfigVersion: Int
+        winningGateway: String,
+        isReachable: Bool,
+        has4K: Bool,
+        hasFhd: Bool,
+        resolutionLabel: String,
+        statusText: String,
+        channel: FPTChannel? = nil
     ) {
-        self.tagName = tagName
+        self.channelId = channelId
+        self.eventId = eventId
         self.title = title
-        self.notes = notes
-        self.publishedAt = publishedAt
-        self.ipaDownloadUrl = ipaDownloadUrl
-        self.htmlUrl = htmlUrl
-        self.fileSizeText = fileSizeText
-        self.hasNewerBinary = hasNewerBinary
-        self.remoteConfigVersion = remoteConfigVersion
+        self.winningGateway = winningGateway
+        self.isReachable = isReachable
+        self.has4K = has4K
+        self.hasFhd = hasFhd
+        self.resolutionLabel = resolutionLabel
+        self.statusText = statusText
+        self.channel = channel
+    }
+}
+
+public struct FPTLiveStreamSyncReport: Codable, Equatable {
+    public let configVersion: Int
+    public let updatedAt: String
+    public let liveGatewayOrder: [String]
+    public let accountLabel: String
+    public let isAuthenticated: Bool
+    public let probedItems: [FPTLiveStreamProbeItem]
+    public let autoHealedCount: Int
+    public let extraChannelsCount: Int
+    public let summaryMessage: String
+
+    public init(
+        configVersion: Int,
+        updatedAt: String,
+        liveGatewayOrder: [String],
+        accountLabel: String,
+        isAuthenticated: Bool,
+        probedItems: [FPTLiveStreamProbeItem],
+        autoHealedCount: Int,
+        extraChannelsCount: Int,
+        summaryMessage: String
+    ) {
+        self.configVersion = configVersion
+        self.updatedAt = updatedAt
+        self.liveGatewayOrder = liveGatewayOrder
+        self.accountLabel = accountLabel
+        self.isAuthenticated = isAuthenticated
+        self.probedItems = probedItems
+        self.autoHealedCount = autoHealedCount
+        self.extraChannelsCount = extraChannelsCount
+        self.summaryMessage = summaryMessage
     }
 }

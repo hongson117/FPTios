@@ -206,7 +206,14 @@ public struct FPTMainView: View {
                 FPTAuthSheet()
             }
             .sheet(isPresented: $showUpdateSheet) {
-                FPTUpdateSheet()
+                FPTUpdateSheet(
+                    onOpenChannel: { ch in
+                        openChannel(ch)
+                    },
+                    onOpenAuth: {
+                        showAuthSheet = true
+                    }
+                )
             }
             .fullScreenCover(item: $activeVodDetail) { detail in
                 FPTVodDetailSheet(
@@ -252,7 +259,7 @@ public struct FPTMainView: View {
             ("intl_channels", "globe.asia.australia.fill", "Nước ngoài"),
             ("vn_channels", "antenna.radiowaves.left.and.right", "Trong nước"),
             ("library", "bookmark.fill", "Thư viện"),
-            ("update", "arrow.triangle.2.circlepath.icloud.fill", service.hasNewerGitHubUpdate ? "Cập nhật (Mới)" : "Cập nhật GitHub")
+            ("update", "dot.radiowaves.left.and.right", "Cập nhật luồng")
         ]
 
         return VStack(spacing: 14) {
@@ -495,30 +502,28 @@ public struct FPTMainView: View {
                     .buttonStyle(FPTG2CardButtonStyle())
                 }
 
-                // Nút Cập Nhật Tự Động & Đổi Luồng Qua GitHub (Hot-Update remote_stream_config.json + Kiểm tra IPA mới)
+                // Nút Cập Nhật Link Trực Tiếp Mới Nhất Cho Tài Khoản Chính Chủ Qua Cloudflare MCP (fptstream)
                 Button {
                     showAccountPanel = false
                     showUpdateSheet = true
                 } label: {
                     HStack(spacing: 12) {
-                        Image(systemName: "arrow.triangle.2.circlepath.icloud.fill")
+                        Image(systemName: "dot.radiowaves.left.and.right")
                             .font(.system(size: 22, weight: .bold))
-                            .foregroundColor(service.hasNewerGitHubUpdate ? .green : fptOrange)
+                            .foregroundColor(fptOrange)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(service.hasNewerGitHubUpdate
-                                 ? "Có Bản Cập Nhật Mới Trên GitHub (\(service.latestGitHubRelease?.tagName ?? ""))"
-                                 : "Cập Nhật Tự Động & Đổi Luồng (GitHub)")
+                            Text("Cập Nhật Link Trực Tiếp Mới Nhất (Tài Khoản Chính Chủ)")
                                 .font(.system(size: 16, weight: .bold))
                                 .foregroundColor(.white)
                                 .lineLimit(1)
-                            Text("Luồng Cloud #\(service.remoteStreamConfig.configVersion) (\(service.remoteStreamConfig.liveGatewayOrder.map { $0.uppercased() }.joined(separator: "→"))) • \(service.currentAppVersionLabel)")
+                            Text("Cloudflare MCP fptstream #\(service.remoteStreamConfig.configVersion) • Cổng Live: \(service.remoteStreamConfig.liveGatewayOrder.map { $0.uppercased() }.joined(separator: "→"))")
                                 .font(.system(size: 12))
-                                .foregroundColor(service.hasNewerGitHubUpdate ? .green : .gray)
+                                .foregroundColor(.green)
                                 .lineLimit(1)
                         }
                         Spacer()
-                        Image(systemName: "qrcode")
-                            .font(.system(size: 18))
+                        Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                            .font(.system(size: 20))
                             .foregroundColor(fptOrange)
                     }
                     .padding(14)
@@ -1025,6 +1030,55 @@ public struct FPTMainView: View {
         return ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 18) {
                 g2HeroSpotlightBanner(for: heroChannel ?? liveEventsList.first, sectionLabel: "Trực Tiếp Thể Thao")
+
+                // Thanh công cụ 1 chạm: Cập nhật link trực tiếp mới nhất cho tài khoản chính chủ qua Cloudflare MCP (fptstream)
+                HStack(spacing: 16) {
+                    Button {
+                        Task {
+                            await service.syncLiveStreamsWithMCP(manual: true)
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            if service.isCheckingUpdate {
+                                ProgressView()
+                            } else {
+                                Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                                    .font(.system(size: 20, weight: .bold))
+                            }
+                            Text(service.isCheckingUpdate
+                                 ? "Đang dò & cập nhật link trực tiếp mới nhất..."
+                                 : "Cập nhật link trực tiếp mới nhất (Tài khoản chính chủ)")
+                                .font(.system(size: 16, weight: .bold))
+                        }
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 12)
+                        .background(fptOrange)
+                        .foregroundColor(.black)
+                        .cornerRadius(12)
+                    }
+                    .buttonStyle(FPTG2CardButtonStyle())
+
+                    Button {
+                        showUpdateSheet = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "dot.radiowaves.left.and.right")
+                                .foregroundColor(.green)
+                            Text("Trạng thái luồng MCP fptstream (#\(service.remoteStreamConfig.configVersion))")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundColor(.white)
+                        }
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 12)
+                        .background(Color.white.opacity(0.12))
+                        .cornerRadius(12)
+                    }
+                    .buttonStyle(FPTG2CardButtonStyle())
+
+                    Spacer()
+                }
+                .padding(.horizontal, 36)
+                .focusSection()
 
                 if !liveNow.isEmpty {
                     g2HorizontalLandscapeRail(

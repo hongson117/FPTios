@@ -213,10 +213,13 @@ public final class FPTDirectClient {
     private var pendingLoginVerifyToken: String = ""
     private var pendingRemoveDeviceToken: String = ""
 
-    // Cấu hình đổi luồng động & kiểm tra bản cập nhật từ GitHub (hongson117/FPTios)
+    // Cấu hình điều phối luồng trực tiếp từ Cloudflare MCP (fptstream)
+    public static let mcpBaseUrl = "https://fptstream.hongson1812.workers.dev"
+    public static let mcpApiKey = "ftvos_sec_9c41e82a75b3d019f6a4c28e50b1"
+
     public private(set) var remoteStreamConfig: FPTRemoteStreamConfig = FPTRemoteStreamConfig.defaultConfig()
     private static let savedDeviceKey = "ftvos_appletv_device_id_v2"
-    private static let savedRemoteConfigKey = "ftvos_github_remote_stream_config_v1"
+    private static let savedRemoteConfigKey = "ftvos_mcp_remote_stream_config_v2"
 
     private init() {
         if let data = UserDefaults.standard.data(forKey: Self.savedRemoteConfigKey),
@@ -226,110 +229,343 @@ public final class FPTDirectClient {
         }
     }
 
-    // MARK: - Đồng bộ Cấu Hình Đổi Luồng Động & Kiểm Tra Bản Cập Nhật Mới Từ GitHub
-    public func syncRemoteStreamConfigFromGitHub() async -> FPTRemoteStreamConfig {
+    private func applyAndSaveRemoteConfig(_ decoded: FPTRemoteStreamConfig) {
+        self.remoteStreamConfig = decoded
+        if let encoded = try? JSONEncoder().encode(decoded) {
+            UserDefaults.standard.set(encoded, forKey: Self.savedRemoteConfigKey)
+        }
+    }
+
+    // MARK: - Đồng bộ Cấu Hình Luồng Trực Tiếp Từ Cloudflare MCP (Kèm dự phòng GitHub)
+    public func syncRemoteStreamConfig() async -> FPTRemoteStreamConfig {
         let ts = Int(Date().timeIntervalSince1970)
-        let rawUrlStr = "https://raw.githubusercontent.com/hongson117/FPTios/main/remote_stream_config.json?t=\(ts)"
-        guard let url = URL(string: rawUrlStr) else {
-            return remoteStreamConfig
-        }
-        var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.timeoutInterval = 8.0
-        req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        req.setValue("FTVOS-AppleTV/2.1", forHTTPHeaderField: "User-Agent")
-
-        if let (data, resp) = try? await URLSession.shared.data(for: req),
-           let httpResp = resp as? HTTPURLResponse,
-           (200...299).contains(httpResp.statusCode),
-           let decoded = try? JSONDecoder().decode(FPTRemoteStreamConfig.self, from: data) {
-            self.remoteStreamConfig = decoded
-            if let encoded = try? JSONEncoder().encode(decoded) {
-                UserDefaults.standard.set(encoded, forKey: Self.savedRemoteConfigKey)
-            }
-            return decoded
-        }
-        return remoteStreamConfig
-    }
-
-    public static func currentAppVersionAndBuild() -> (version: String, build: Int) {
-        let ver = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "2.1.0"
-        let buildStr = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "5"
-        let buildInt = Int(buildStr.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 5
-        return (ver, buildInt)
-    }
-
-    public func checkGitHubReleaseAndConfig() async -> (FPTRemoteStreamConfig, FPTGitHubReleaseInfo) {
-        let cfg = await syncRemoteStreamConfigFromGitHub()
-        let (_, currentBuild) = Self.currentAppVersionAndBuild()
-
-        let apiStr = "https://api.github.com/repos/hongson117/FPTios/releases/latest"
-        if let url = URL(string: apiStr) {
-            var req = URLRequest(url: url)
+        let mcpUrlStr = "\(Self.mcpBaseUrl)/api/stream-config?key=\(Self.mcpApiKey)&t=\(ts)"
+        if let mcpUrl = URL(string: mcpUrlStr) {
+            var req = URLRequest(url: mcpUrl)
             req.httpMethod = "GET"
             req.timeoutInterval = 8.0
             req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-            req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-            req.setValue("FTVOS-AppleTV/2.1", forHTTPHeaderField: "User-Agent")
+            req.setValue("FTVOS-AppleTV/2.2", forHTTPHeaderField: "User-Agent")
+            req.setValue(Self.mcpApiKey, forHTTPHeaderField: "X-API-Key")
+
+            if let (data, resp) = try? await URLSession.shared.data(for: req),
+               let httpResp = resp as? HTTPURLResponse,
+               (200...299).contains(httpResp.statusCode) {
+                if let decoded = try? JSONDecoder().decode(FPTRemoteStreamConfig.self, from: data) {
+                    applyAndSaveRemoteConfig(decoded)
+                    return decoded
+                }
+                if let jsonObj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let nestedCfg = jsonObj["stream_config"] as? [String: Any],
+                   let nestedData = try? JSONSerialization.data(withJSONObject: nestedCfg),
+                   let decoded = try? JSONDecoder().decode(FPTRemoteStreamConfig.self, from: nestedData) {
+                    applyAndSaveRemoteConfig(decoded)
+                    return decoded
+                }
+            }
+        }
+
+        // Dự phòng đọc từ GitHub nếu mạng tới Cloudflare Worker bị gián đoạn tạm thời
+        let ghUrlStr = "https://raw.githubusercontent.com/hongson117/FPTios/main/remote_stream_config.json?t=\(ts)"
+        if let ghUrl = URL(string: ghUrlStr) {
+            var req = URLRequest(url: ghUrl)
+            req.httpMethod = "GET"
+            req.timeoutInterval = 8.0
+            req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            req.setValue("FTVOS-AppleTV/2.2", forHTTPHeaderField: "User-Agent")
 
             if let (data, resp) = try? await URLSession.shared.data(for: req),
                let httpResp = resp as? HTTPURLResponse,
                (200...299).contains(httpResp.statusCode),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                let tagName = (json["tag_name"] as? String) ?? "v\(cfg.latestAppVersion)-\(cfg.latestBuildNumber)"
-                let name = (json["name"] as? String) ?? "FTVOS Apple TV (\(tagName))"
-                let body = (json["body"] as? String) ?? cfg.updateNotes
-                let publishedAtRaw = (json["published_at"] as? String) ?? cfg.updatedAt
-                let htmlUrl = (json["html_url"] as? String) ?? cfg.releasePageUrl
+               let decoded = try? JSONDecoder().decode(FPTRemoteStreamConfig.self, from: data) {
+                applyAndSaveRemoteConfig(decoded)
+                return decoded
+            }
+        }
+        return remoteStreamConfig
+    }
 
-                var downloadUrl = cfg.latestIpaUrl
-                var sizeBytes: Int = 0
-                if let assets = json["assets"] as? [[String: Any]],
-                   let ipaAsset = assets.first(where: { (($0["name"] as? String) ?? "").lowercased().hasSuffix(".ipa") }) ?? assets.first {
-                    if let dl = ipaAsset["browser_download_url"] as? String, !dl.isEmpty {
-                        downloadUrl = dl
-                    }
-                    sizeBytes = (ipaAsset["size"] as? Int) ?? 0
-                }
+    // MARK: - Gửi Tín Hiệu Luồng Trực Tiếp Của Tài Khoản Chính Chủ Lên Cloudflare MCP & Nhận Về Cấu Hình Mới Nhất
+    @discardableResult
+    public func sendStreamSignalToMCP(
+        config: FPTBootstrapConfig,
+        action: String,
+        probedChannels: [[String: Any]]
+    ) async -> (config: FPTRemoteStreamConfig, autoHealedCount: Int) {
+        let urlStr = "\(Self.mcpBaseUrl)/api/stream-signal?key=\(Self.mcpApiKey)"
+        guard let url = URL(string: urlStr) else {
+            return (remoteStreamConfig, 0)
+        }
 
-                // Tách số build từ tag_name dạng "v2.0.0-12" hoặc "v2.1.0-12"
-                var remoteBuild = cfg.latestBuildNumber
-                if let dashPart = tagName.split(separator: "-").last,
-                   let parsedBuild = Int(dashPart.filter { $0.isNumber }) {
-                    remoteBuild = max(remoteBuild, parsedBuild)
-                }
+        let payload: [String: Any] = [
+            "action": action,
+            "user_id": config.userId,
+            "phone": config.phone ?? "",
+            "device_id": config.localId,
+            "authenticated": config.isAuthenticated,
+            "probed_channels": probedChannels
+        ]
 
-                let sizeText = sizeBytes > 0
-                    ? String(format: "%.2f MB", Double(sizeBytes) / (1024.0 * 1024.0))
-                    : "~1.7 MB"
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10.0
+        req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        req.setValue("FTVOS-AppleTV/2.2", forHTTPHeaderField: "User-Agent")
+        req.setValue(Self.mcpApiKey, forHTTPHeaderField: "X-API-Key")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
-                let info = FPTGitHubReleaseInfo(
-                    tagName: tagName,
-                    title: name,
-                    notes: body.isEmpty ? cfg.updateNotes : body,
-                    publishedAt: publishedAtRaw,
-                    ipaDownloadUrl: downloadUrl,
-                    htmlUrl: htmlUrl,
-                    fileSizeText: sizeText,
-                    hasNewerBinary: remoteBuild > currentBuild,
-                    remoteConfigVersion: cfg.configVersion
-                )
-                return (cfg, info)
+        if let (data, resp) = try? await URLSession.shared.data(for: req),
+           let httpResp = resp as? HTTPURLResponse,
+           (200...299).contains(httpResp.statusCode),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let autoHealedArr = (json["auto_healed"] as? [[String: Any]]) ?? []
+            if let cfgObj = json["stream_config"] as? [String: Any],
+               let cfgData = try? JSONSerialization.data(withJSONObject: cfgObj),
+               let decoded = try? JSONDecoder().decode(FPTRemoteStreamConfig.self, from: cfgData) {
+                applyAndSaveRemoteConfig(decoded)
+                return (decoded, autoHealedArr.count)
+            }
+        }
+        return (remoteStreamConfig, 0)
+    }
+
+    // MARK: - Tự Động Dò Link Trực Tiếp Mới Nhất Cho Tài Khoản Chính Chủ & Đồng Bộ Hai Chiều Với Cloudflare MCP
+    public func probeAndSyncLiveStreamsWithMCP(
+        config: FPTBootstrapConfig,
+        activeLiveChannels: [FPTChannel] = [],
+        manualTrigger: Bool = false
+    ) async -> (FPTRemoteStreamConfig, FPTLiveStreamSyncReport) {
+        var cfg = await syncRemoteStreamConfig()
+        let accountLabel: String = {
+            if !config.isAuthenticated {
+                return "Chưa đăng nhập tài khoản chính chủ"
+            }
+            let ph = (config.phone ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !ph.isEmpty && !config.userId.isEmpty {
+                return "SĐT: \(ph) • UID: \(config.userId)"
+            } else if !ph.isEmpty {
+                return "SĐT: \(ph)"
+            } else {
+                return "UID: \(config.userId)"
+            }
+        }()
+
+        // Nếu chưa đăng nhập hoặc chỉ khởi động nhẹ không bấm nút dò sâu, khi manualTrigger == false và chưa đăng nhập thì trả ngay báo cáo cấu hình MCP
+        guard config.isAuthenticated else {
+            let gwText = cfg.liveGatewayOrder.map { $0.uppercased() }.joined(separator: " → ")
+            let report = FPTLiveStreamSyncReport(
+                configVersion: cfg.configVersion,
+                updatedAt: cfg.updatedAt,
+                liveGatewayOrder: cfg.liveGatewayOrder,
+                accountLabel: accountLabel,
+                isAuthenticated: false,
+                probedItems: [],
+                autoHealedCount: 0,
+                extraChannelsCount: cfg.extraLiveChannels.count,
+                summaryMessage: "☁️ Đã đồng bộ cấu hình Cloudflare MCP #\(cfg.configVersion) (\(gwText)). Hãy đăng nhập tài khoản FPT Play chính chủ để tự động dò & cập nhật link trực tiếp 4K/FHD mới nhất."
+            )
+            return (cfg, report)
+        }
+
+        // Xây dựng danh sách các luồng Trực Tiếp trọng tâm cần dò cho tài khoản chính chủ:
+        // 1. Kênh Ngoại Hạng Anh 4K UHD Trực Tiếp (epl-hn-01-4k)
+        // 2. Tối đa 3 sự kiện/trận đấu đang diễn ra trực tiếp trong mục Trực tiếp (live_football)
+        // 3. Kênh VTV1 HD (vtv1-hd) & HBO HD (hbo)
+        var targets: [(channelId: String, eventId: String, title: String, isDrm: Bool, channelObj: FPTChannel?)] = []
+        var seenKeys: Set<String> = []
+
+        let epl4KChannel = FPTChannel(
+            id: "direct_epl_4k",
+            channelId: "epl-hn-01-4k",
+            eventId: "",
+            name: "Ngoại Hạng Anh 4K UHD (Luồng Trực Tiếp Chính Chủ)",
+            badge: "🔴 TRỰC TIẾP 4K UHD",
+            categoryId: "live_football",
+            category: "⚽ THỂ THAO & BÓNG ĐÁ",
+            logo: "https://images.fptplay53.net/media/photo/OTT/2025/08/15/ngoai-hang-anh-4k_1755249200.jpg",
+            desc: "Luồng trực tiếp Ngoại Hạng Anh 4K UHD 2160p50 HEVC FairPlay dành cho tài khoản FPT Play chính chủ.",
+            is4K: true,
+            isDRM: true,
+            isLive: true,
+            statusText: "TRỰC TIẾP 4K",
+            resolution: "4K UHD (2160p50 HEVC)",
+            fps: "50fps • FairPlay DRM"
+        )
+        targets.append(("epl-hn-01-4k", "", "Ngoại Hạng Anh 4K UHD (epl-hn-01-4k)", true, epl4KChannel))
+        seenKeys.insert("epl-hn-01-4k")
+
+        let sourceEvents = !activeLiveChannels.isEmpty ? activeLiveChannels : cachedLiveEvents
+        let liveNowEvents = sourceEvents.filter { $0.isLive && !$0.isVod }
+        for ev in liveNowEvents.prefix(manualTrigger ? 4 : 2) {
+            let cid = ev.channelId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cid.isEmpty, !seenKeys.contains(cid.lowercased()) else { continue }
+            seenKeys.insert(cid.lowercased())
+            targets.append((cid, ev.eventId, ev.name, ev.isDRM, ev))
+        }
+
+        if manualTrigger {
+            if !seenKeys.contains("vtv1-hd") {
+                seenKeys.insert("vtv1-hd")
+                targets.append(("vtv1-hd", "", "VTV1 HD (Truyền hình Trực tiếp)", false, nil))
+            }
+            if !seenKeys.contains("hbo") {
+                seenKeys.insert("hbo")
+                targets.append(("hbo", "", "HBO HD (Quốc tế VIP DRM)", true, nil))
             }
         }
 
-        let fallbackInfo = FPTGitHubReleaseInfo(
-            tagName: "v\(cfg.latestAppVersion)-\(cfg.latestBuildNumber)",
-            title: "FTVOS Apple TV v\(cfg.latestAppVersion) (Build #\(cfg.latestBuildNumber))",
-            notes: cfg.updateNotes,
-            publishedAt: cfg.updatedAt,
-            ipaDownloadUrl: cfg.latestIpaUrl,
-            htmlUrl: cfg.releasePageUrl,
-            fileSizeText: "~1.7 MB",
-            hasNewerBinary: cfg.latestBuildNumber > currentBuild,
-            remoteConfigVersion: cfg.configVersion
+        var probeItems: [FPTLiveStreamProbeItem] = []
+        var signalItems: [[String: Any]] = []
+
+        for target in targets {
+            var effectiveCid = target.channelId
+            if let overrideMap = cfg.channelDirectOverrides[effectiveCid.lowercased()],
+               let remapped = overrideMap["remap_id"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !remapped.isEmpty {
+                effectiveCid = remapped
+            }
+
+            let configuredGateways = cfg.channelGatewayOverrides[effectiveCid.lowercased()] ?? cfg.liveGatewayOrder
+            let gatewaysToProbe = configuredGateways.isEmpty ? ["ios", "stad", "web"] : configuredGateways
+            // Đảm bảo luôn kiểm tra đủ cả 3 cổng để nếu cổng ưu tiên đổi thì phát hiện cổng sống mới
+            var fullGateways = gatewaysToProbe
+            for g in ["ios", "stad", "web"] where !fullGateways.contains(g) {
+                fullGateways.append(g)
+            }
+
+            let streamQuery: [(String, String)] = [
+                ("fhd", "1"),
+                ("data_type", ""),
+                ("enable_preview", "0"),
+                ("event_id", target.eventId),
+                ("stream_profile", "1")
+            ]
+
+            var winningGw = ""
+            var best4K = FPTLockedHlsResult(originalUrl: "", lockedUrl: "", isReachable: false, maxHeight: 0, maxWidth: 0, maxFps: 0, maxBandwidth: 0)
+            var bestH264 = FPTLockedHlsResult(originalUrl: "", lockedUrl: "", isReachable: false, maxHeight: 0, maxWidth: 0, maxFps: 0, maxBandwidth: 0)
+            var gatewayResults: [String: Any] = [:]
+
+            for gw in fullGateways {
+                let (gwSt, gwPayload) = (try? await requestGatewayJSON(
+                    gateway: gw,
+                    config: config,
+                    route: "stream/tv/\(effectiveCid)/adaptive_bitrate",
+                    extraQuery: streamQuery,
+                    authenticated: true
+                )) ?? (500, [:])
+
+                let gwStatusVal = String(describing: gwPayload["status"] ?? "0")
+                let gwData = (gwPayload["data"] as? [String: Any]) ?? [:]
+                if gwStatusVal == "1" && !gwData.isEmpty {
+                    let (gH265, gH264, _) = buildDynamicCandidateArrays(
+                        from: gwData,
+                        isDrmContent: target.isDrm,
+                        channelOrVodId: effectiveCid
+                    )
+                    let gwSession = (gwData["stream_session"] as? String) ?? ""
+                    async let lock4K = resolveFirstReachableLockedHls(candidates: gH265, streamSession: gwSession)
+                    async let lockH264 = resolveFirstReachableLockedHls(candidates: gH264, streamSession: gwSession)
+                    let (r4K, rH264) = await (lock4K, lockH264)
+
+                    gatewayResults[gw] = [
+                        "http_status": gwSt,
+                        "has_4k": r4K.isReachable,
+                        "max_height_4k": r4K.maxHeight,
+                        "has_fhd": rH264.isReachable,
+                        "max_height_fhd": rH264.maxHeight
+                    ]
+
+                    if r4K.isReachable || rH264.isReachable {
+                        if winningGw.isEmpty || (r4K.isReachable && !best4K.isReachable) {
+                            winningGw = gw
+                            best4K = r4K
+                            bestH264 = rH264
+                        }
+                        // Nếu cổng đầu tiên đã có 4K (với kênh 4K) hoặc FHD (với kênh FHD), dừng sớm để tốc độ nhanh
+                        if (effectiveCid.contains("4k") && r4K.isReachable) || (!effectiveCid.contains("4k") && (r4K.isReachable || rH264.isReachable)) {
+                            break
+                        }
+                    }
+                } else {
+                    gatewayResults[gw] = [
+                        "http_status": gwSt,
+                        "has_4k": false,
+                        "has_fhd": false
+                    ]
+                }
+            }
+
+            let isReachable = best4K.isReachable || bestH264.isReachable
+            let hasTrue4K = best4K.isReachable && (best4K.maxHeight >= 1440 || effectiveCid.lowercased().contains("4k"))
+            let hasFhd = bestH264.isReachable || (best4K.isReachable && !hasTrue4K)
+            let resLabel: String
+            if hasTrue4K && hasFhd {
+                resLabel = "4K UHD (2160p50) + 1080p50"
+            } else if hasTrue4K {
+                resLabel = "4K UHD (2160p50 HEVC)"
+            } else if hasFhd {
+                let h = max(bestH264.maxHeight, best4K.maxHeight, 1080)
+                resLabel = "Full HD (\(h)p50)"
+            } else {
+                resLabel = "Đang chờ mở luồng"
+            }
+
+            let statusTxt = isReachable
+                ? "🟢 Sẵn sàng trên cổng \(winningGw.uppercased()) • \(resLabel)"
+                : "🟡 Chưa mở luồng trực tiếp lúc này"
+
+            probeItems.append(FPTLiveStreamProbeItem(
+                channelId: effectiveCid,
+                eventId: target.eventId,
+                title: target.title,
+                winningGateway: winningGw.isEmpty ? "ios" : winningGw,
+                isReachable: isReachable,
+                has4K: hasTrue4K,
+                hasFhd: hasFhd,
+                resolutionLabel: resLabel,
+                statusText: statusTxt,
+                channel: target.channelObj
+            ))
+
+            signalItems.append([
+                "channel_id": effectiveCid,
+                "event_id": target.eventId,
+                "title": target.title,
+                "winning_gateway": winningGw,
+                "is_reachable": isReachable,
+                "has_4k": hasTrue4K,
+                "has_fhd": hasFhd,
+                "resolution": resLabel,
+                "gateways": gatewayResults
+            ])
+        }
+
+        // Gửi toàn bộ kết quả dò luồng trực tiếp của tài khoản chính chủ lên Cloudflare MCP để tự động cập nhật & đồng bộ về app
+        let (updatedCfg, healedCount) = await sendStreamSignalToMCP(
+            config: config,
+            action: manualTrigger ? "manual_authenticated_live_refresh" : "auto_authenticated_live_sync",
+            probedChannels: signalItems
         )
-        return (cfg, fallbackInfo)
+        cfg = updatedCfg
+
+        let reachableCount = probeItems.filter { $0.isReachable }.count
+        let reachable4KCount = probeItems.filter { $0.has4K }.count
+        let gwSummary = cfg.liveGatewayOrder.map { $0.uppercased() }.joined(separator: " → ")
+        let summary = "✅ Đã cập nhật link trực tiếp mới nhất cho TK chính chủ (\(reachableCount)/\(probeItems.count) luồng sẵn sàng, \(reachable4KCount) luồng 4K UHD) • MCP #\(cfg.configVersion) (\(gwSummary))"
+
+        let report = FPTLiveStreamSyncReport(
+            configVersion: cfg.configVersion,
+            updatedAt: cfg.updatedAt,
+            liveGatewayOrder: cfg.liveGatewayOrder,
+            accountLabel: accountLabel,
+            isAuthenticated: true,
+            probedItems: probeItems,
+            autoHealedCount: healedCount,
+            extraChannelsCount: cfg.extraLiveChannels.count,
+            summaryMessage: summary
+        )
+        return (cfg, report)
     }
 
     // MARK: - Khởi tạo cấu hình gốc ngay trên Apple TV (Không cần Laptop)
@@ -1757,8 +1993,49 @@ public final class FPTDirectClient {
         let eplHighlights = await fetchEplHighlights(config: config, force: forceEvents)
         let intlChannels = intlDrmList + intlOpenList
 
+        // Hợp nhất danh sách kênh trực tiếp bổ sung từ Cloudflare MCP (extra_live_channels) & kênh Ngoại Hạng Anh 4K Trực Tiếp chính chủ
+        var mergedLiveEvents: [FPTChannel] = []
+        var seenLiveIds: Set<String> = []
+
+        for extraCh in remoteStreamConfig.extraLiveChannels {
+            if !seenLiveIds.contains(extraCh.id) {
+                seenLiveIds.insert(extraCh.id)
+                mergedLiveEvents.append(extraCh)
+            }
+        }
+
+        // Luôn ghim kênh Ngoại Hạng Anh 4K UHD Trực Tiếp (epl-hn-01-4k) ở đầu danh mục Trực Tiếp nếu chưa có trong lịch sự kiện
+        if !liveEvents.contains(where: { $0.channelId.lowercased() == "epl-hn-01-4k" }) && !mergedLiveEvents.contains(where: { $0.channelId.lowercased() == "epl-hn-01-4k" }) {
+            let direct4K = FPTChannel(
+                id: "direct_epl_4k",
+                channelId: "epl-hn-01-4k",
+                eventId: "",
+                name: "Ngoại Hạng Anh 4K UHD (Luồng Trực Tiếp Chính Chủ)",
+                badge: "🔴 TRỰC TIẾP 4K UHD",
+                categoryId: "live_football",
+                category: "⚽ THỂ THAO & BÓNG ĐÁ",
+                logo: "https://images.fptplay53.net/media/photo/OTT/2025/08/15/ngoai-hang-anh-4k_1755249200.jpg",
+                desc: "Kênh trực tiếp Ngoại Hạng Anh 4K UHD 2160p50 HEVC FairPlay (Tự động cập nhật link trực tiếp qua Cloudflare MCP fptstream).",
+                is4K: true,
+                isDRM: true,
+                isLive: true,
+                statusText: "TRỰC TIẾP 4K",
+                resolution: "4K UHD (2160p50 HEVC)",
+                fps: "50fps • FairPlay DRM"
+            )
+            seenLiveIds.insert(direct4K.id)
+            mergedLiveEvents.append(direct4K)
+        }
+
+        for ev in liveEvents {
+            if !seenLiveIds.contains(ev.id) {
+                seenLiveIds.insert(ev.id)
+                mergedLiveEvents.append(ev)
+            }
+        }
+
         let categories: [FPTCategory] = [
-            FPTCategory(id: "live_football", title: "Trực Tiếp", icon: "dot.radiowaves.left.and.right", channels: liveEvents),
+            FPTCategory(id: "live_football", title: "Trực Tiếp", icon: "dot.radiowaves.left.and.right", channels: mergedLiveEvents),
             FPTCategory(id: "epl_highlights", title: "Ngoại Hạng Anh", icon: "soccerball", channels: eplHighlights),
             FPTCategory(id: "vod_series", title: "Phim Bộ", icon: "film.stack.fill", channels: vodLists.series),
             FPTCategory(id: "vod_movies", title: "Phim Lẻ", icon: "popcorn.fill", channels: vodLists.movies),
@@ -2944,6 +3221,7 @@ public final class FPTDirectClient {
         var locked4K = FPTLockedHlsResult(originalUrl: "", lockedUrl: "", isReachable: false, maxHeight: 0, maxWidth: 0, maxFps: 0, maxBandwidth: 0)
         var lockedH264 = FPTLockedHlsResult(originalUrl: "", lockedUrl: "", isReachable: false, maxHeight: 0, maxWidth: 0, maxFps: 0, maxBandwidth: 0)
         var lastServerMsg = ""
+        var winningGateway = "ios"
 
         for gw in liveGateways {
             let (gwSt, gwPayload) = (try? await requestGatewayJSON(
@@ -2983,6 +3261,7 @@ public final class FPTDirectClient {
                     streamSession = gwSession
                     locked4K = res4K
                     lockedH264 = resH264
+                    winningGateway = gw
                 }
 
                 // Nếu đã tìm thấy luồng .m3u8 sống (HTTP 200) trên cổng này, dừng ngay không cần gọi cổng dự phòng
@@ -3100,6 +3379,31 @@ public final class FPTDirectClient {
             merchant: merchant,
             sourceProvider: sourceProvider
         )
+
+        // Gửi tín hiệu phát trực tiếp thực tế của tài khoản chính chủ về Cloudflare MCP (fptstream) ở chế độ nền
+        let signalCid = channelId
+        let signalEvId = eventId
+        let signalTitle = title
+        let signalGw = winningGateway
+        let signalHas4K = hasTrue4K
+        let signalHasFhd = !hlsH264.isEmpty || !hlsClear.isEmpty
+        let signalCfg = config
+        Task.detached(priority: .utility) {
+            await FPTDirectClient.shared.sendStreamSignalToMCP(
+                config: signalCfg,
+                action: "live_playback_resolved",
+                probedChannels: [[
+                    "channel_id": signalCid,
+                    "event_id": signalEvId,
+                    "title": signalTitle,
+                    "winning_gateway": signalGw,
+                    "is_reachable": true,
+                    "has_4k": signalHas4K,
+                    "has_fhd": signalHasFhd,
+                    "resolution": signalHas4K ? "4K UHD (2160p50)" : "Full HD (1080p50)"
+                ]]
+            )
+        }
 
         return FPTResolvedStream(
             ok: true,
