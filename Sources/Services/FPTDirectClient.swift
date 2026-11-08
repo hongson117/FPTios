@@ -521,14 +521,24 @@ public final class FPTDirectClient {
             )
         }
 
-        // Chỉ giữ duy nhất biến thể cao nhất (3840x2160 50fps cho luồng 4K hoặc 1920x1080 50fps cho luồng 1080p)
-        // Loại bỏ hoàn toàn 480p / 720p / 1080p25 để AVPlayer không bao giờ tự rớt chất lượng!
+        // Giữ toàn bộ các biến thể cùng độ phân giải & tốc độ khung hình cao nhất (ví dụ 3840x2160 cho cả nhóm âm thanh AAC 2.0 DEFAULT=YES và Dolby EC-3 5.1)
+        // để AVPlayer luôn có đầy đủ track âm thanh mặc định mà vẫn loại bỏ 100% các độ phân giải thấp (360p/480p/720p/1080p25)!
+        let topTierVariants = sortedVariants.filter { v in
+            let sameHeight = (best.height == 0) || (v.height == best.height)
+            let sameWidth = (best.width == 0) || (v.width == best.width)
+            let sameFps = (best.fps <= 0.1) || (v.fps <= 0.1) || (abs(v.fps - best.fps) <= 1.0)
+            return sameHeight && sameWidth && sameFps
+        }
+        let chosenVariants = topTierVariants.isEmpty ? [best] : topTierVariants
+
         var outLines: [String] = []
         for h in headerLines {
             outLines.append(h)
         }
-        outLines.append(best.streamInfLine)
-        outLines.append(best.uriLine)
+        for v in chosenVariants {
+            outLines.append(v.streamInfLine)
+            outLines.append(v.uriLine)
+        }
         let lockedManifest = outLines.joined(separator: "\n") + "\n"
         let registeredUrl = FPTLocalManifestServer.shared.registerManifest(lockedManifest) ?? cleanMaster
 
@@ -543,6 +553,43 @@ public final class FPTDirectClient {
         )
     }
 
+    public func resolveFirstReachableLockedHls(
+        candidates: [String],
+        streamSession: String = ""
+    ) async -> FPTLockedHlsResult {
+        var seen: Set<String> = []
+        var uniqueCandidates: [String] = []
+        for raw in candidates {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  trimmed.contains(".m3u8"),
+                  !trimmed.contains(".mpd"),
+                  !seen.contains(trimmed) else {
+                continue
+            }
+            seen.insert(trimmed)
+            uniqueCandidates.append(trimmed)
+        }
+
+        for candidate in uniqueCandidates {
+            let locked = await lockMasterPlaylistToHighestVariant(masterUrl: candidate, streamSession: streamSession)
+            if locked.isReachable {
+                return locked
+            }
+        }
+
+        let fallbackRaw = uniqueCandidates.first ?? ""
+        return FPTLockedHlsResult(
+            originalUrl: fallbackRaw,
+            lockedUrl: fallbackRaw,
+            isReachable: false,
+            maxHeight: 0,
+            maxWidth: 0,
+            maxFps: 0,
+            maxBandwidth: 0
+        )
+    }
+
     public func extractJwtUserId(_ sessionJwt: String) -> String? {
         let parts = sessionJwt.split(separator: ".")
         guard parts.count >= 2 else { return nil }
@@ -554,11 +601,22 @@ public final class FPTDirectClient {
             payloadB64 += String(repeating: "=", count: 4 - rem)
         }
         guard let data = Data(base64Encoded: payloadB64),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let uid = json["userId"] as? String, !uid.isEmpty else {
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-        return uid
+        if let uid = json["userId"] as? String, !uid.isEmpty {
+            return uid
+        }
+        if let uidStr = json["user_id_str"] as? String, !uidStr.isEmpty {
+            return uidStr
+        }
+        if let uidInt = json["user_id"] as? Int, uidInt > 0 {
+            return String(uidInt)
+        }
+        if let uidStr = json["user_id"] as? String, !uidStr.isEmpty {
+            return uidStr
+        }
+        return nil
     }
 
     // MARK: - Gọi HTTP trực tiếp tới api.fptplay.net
@@ -691,6 +749,67 @@ public final class FPTDirectClient {
         req.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
         req.setValue("https://fptplay.vn", forHTTPHeaderField: "Origin")
         req.setValue("https://fptplay.vn/", forHTTPHeaderField: "Referer")
+        req.setValue(localId, forHTTPHeaderField: "X-DID")
+
+        if authenticated && !config.accessToken.isEmpty {
+            let tokenType = config.accessTokenType.isEmpty ? "Bearer" : config.accessTokenType
+            req.setValue("\(tokenType) \(config.accessToken)", forHTTPHeaderField: "Authorization")
+            if !config.profileId.isEmpty {
+                req.setValue(config.profileId, forHTTPHeaderField: "profileid")
+                req.setValue(config.profileType, forHTTPHeaderField: "profiletype")
+                req.setValue(config.profileMaturity, forHTTPHeaderField: "profilematurity")
+            }
+        }
+
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 500
+        let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        return (status, json)
+    }
+
+    // MARK: - Gọi cổng Apple iOS/tvOS Native FairPlay API (/api/v7.1_ios/) để lấy trực tiếp luồng 4K HEVC FairPlay (.m3u8) & 1080p50 FairPlay (.m3u8)
+    public func requestIOSJSON(
+        config: FPTBootstrapConfig,
+        method: String = "GET",
+        route: String,
+        extraQuery: [(String, String)] = [],
+        authenticated: Bool = true
+    ) async throws -> (Int, [String: Any]) {
+        let iosPrefix = "/api/v7.1_ios/"
+        let cleanRoute = route.hasPrefix("/") ? String(route.dropFirst()) : route
+        let path = iosPrefix + cleanRoute
+        let localId = config.localId.isEmpty ? Self.currentOrNewDeviceId() : config.localId
+
+        var queryItems: [URLQueryItem] = extraQuery.map { URLQueryItem(name: $0.0, value: $0.1) }
+        let iosCommon: [(String, String)] = [
+            ("drm", "1"),
+            ("deviceWidth", "3840"),
+            ("deviceHeight", "2160"),
+            ("fhd", "1"),
+            ("2k", "1"),
+            ("4k", "1"),
+            ("source", "1"),
+            ("quality", "auto"),
+            ("device", "Apple TV"),
+            ("stream_profile", "1")
+        ]
+        for (k, v) in iosCommon {
+            if !queryItems.contains(where: { $0.name == k }) {
+                queryItems.append(URLQueryItem(name: k, value: v))
+            }
+        }
+
+        var comps = URLComponents(string: config.host + path)
+        comps?.queryItems = queryItems
+        guard let url = comps?.url else {
+            throw NSError(domain: "FPTDirectClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Không tạo được URL FPT Play iOS/tvOS FairPlay API"])
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = method
+        req.timeoutInterval = 15.0
+        req.setValue("FPTPlay/7.17.2 (Apple TV; tvOS 18.0)", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue(localId, forHTTPHeaderField: "X-DID")
 
         if authenticated && !config.accessToken.isEmpty {
@@ -1128,6 +1247,9 @@ public final class FPTDirectClient {
         }
         if uid.isEmpty, let jwtUid = extractJwtUserId(sessionToken), !jwtUid.isEmpty {
             uid = jwtUid
+        }
+        if uid.isEmpty, let accessUid = extractJwtUserId(config.accessToken), !accessUid.isEmpty {
+            uid = accessUid
         }
         return uid
     }
@@ -2291,9 +2413,9 @@ public final class FPTDirectClient {
             ("is_pre_stream", "0")
         ]
 
-        // 2. Ưu tiên gọi cổng Web/Safari FairPlay (/api/v7.1_w/stream/vod/...) để nhận luồng HLS FairPlay (.m3u8) gốc cho Apple TV
-        //    (Cổng /api/v7.1_stad/ chỉ trả Widevine DASH .mpd cho các phim DRM của Galaxy Play / Điện ảnh)
-        var (httpSt, streamPayload) = (try? await requestWebJSON(
+        // 2. Ưu tiên gọi cổng Apple iOS/tvOS (/api/v7.1_ios/stream/vod/...) để nhận đầy đủ luồng 4K HEVC FairPlay (.m3u8) + 1080p H.264,
+        //    sau đó dự phòng sang cổng Web/Safari (/api/v7.1_w/) và SmartTV (/api/v7.1_stad/) nếu cần.
+        var (httpSt, streamPayload) = (try? await requestIOSJSON(
             config: config,
             route: "stream/vod/\(cleanVodId)/\(effectiveEpId)/\(autoProfile)",
             extraQuery: vodQuery,
@@ -2301,7 +2423,7 @@ public final class FPTDirectClient {
         )) ?? (500, [:])
 
         if httpSt != 200 && effectiveEpId != cleanEpId {
-            let (retrySt, retryPayload) = (try? await requestWebJSON(
+            let (retrySt, retryPayload) = (try? await requestIOSJSON(
                 config: config,
                 route: "stream/vod/\(cleanVodId)/\(cleanEpId)/\(autoProfile)",
                 extraQuery: vodQuery,
@@ -2320,26 +2442,43 @@ public final class FPTDirectClient {
             return !trimmed.isEmpty && trimmed.contains(".m3u8") && !trimmed.contains(".mpd")
         }
 
-        let hasWebM3u8 = [
-            sdata["url_hls_drm_dolby_vision"],
-            sdata["url_hls_drm_h265_hdr_10_plus"],
-            sdata["url_hls_drm_h265_hdr_10"],
-            sdata["url_hls_drm_h265_hlg"],
-            sdata["url_hls_drm_h265"],
-            sdata["url_hls_drm"],
-            sdata["url_hls_dolby_vision"],
-            sdata["url_hls_h265_hdr_10_plus"],
-            sdata["url_hls_h265_hdr_10"],
-            sdata["url_hls_h265_hlg"],
-            sdata["url_hls_h265"],
-            sdata["url_hls"],
-            sdata["url_sub"],
-            sdata["url_clean"],
-            sdata["url"]
-        ].compactMap { $0 as? String }.contains(where: { isPlayableHls($0) })
+        let hasAnyPlayableM3u8: ([String: Any]) -> Bool = { dict in
+            [
+                dict["url_hls_drm_dolby_vision"],
+                dict["url_hls_drm_h265_hdr_10_plus"],
+                dict["url_hls_drm_h265_hdr_10"],
+                dict["url_hls_drm_h265_hlg"],
+                dict["url_hls_drm_h265"],
+                dict["url_hls_drm"],
+                dict["url_hls_dolby_vision"],
+                dict["url_hls_h265_hdr_10_plus"],
+                dict["url_hls_h265_hdr_10"],
+                dict["url_hls_h265_hlg"],
+                dict["url_hls_h265"],
+                dict["url_hls"],
+                dict["url_sub"],
+                dict["url_clean"],
+                dict["url"]
+            ].compactMap { $0 as? String }.contains(where: { isPlayableHls($0) })
+        }
 
-        // Dự phòng qua /api/v7.1_stad/ chỉ khi cổng Web không trả về .m3u8 (thay thế đồng bộ sdata để không trộn lẫn session token)
-        if !hasWebM3u8 {
+        if !hasAnyPlayableM3u8(sdata) {
+            let (webSt, webPayload) = (try? await requestWebJSON(
+                config: config,
+                route: "stream/vod/\(cleanVodId)/\(effectiveEpId)/\(autoProfile)",
+                extraQuery: vodQuery,
+                authenticated: config.isAuthenticated
+            )) ?? (500, [:])
+            let webData = (webPayload["data"] as? [String: Any]) ?? webPayload
+            if webSt == 200 && hasAnyPlayableM3u8(webData) {
+                httpSt = webSt
+                streamPayload = webPayload
+                sdata = webData
+            }
+        }
+
+        // Dự phòng qua /api/v7.1_stad/ chỉ khi cả cổng iOS và Web không trả về .m3u8 (thay thế đồng bộ sdata để không trộn lẫn session token)
+        if !hasAnyPlayableM3u8(sdata) {
             let (stadSt, stadPayload) = (try? await requestJSON(
                 config: config,
                 route: "stream/vod/\(cleanVodId)/\(effectiveEpId)/\(autoProfile)",
@@ -2358,11 +2497,16 @@ public final class FPTDirectClient {
             ?? (streamPayload["require_vip_plan"] as? String)
             ?? ""
 
-        // 3. Tuyển chọn URL HLS (.m3u8) theo đúng thứ tự ưu tiên Safari FairPlay trên fptplay.vn (6195-e5581bdb4a15b3c8.js)
+        let sessionToken = (sdata["session"] as? String) ?? ""
+        let merchant = (sdata["merchant"] as? String) ?? ""
+        let streamSession = (sdata["stream_session"] as? String) ?? ""
+        let effectiveIsDrm = isDrmContent || (!sessionToken.isEmpty && !merchant.isEmpty)
+
+        // 3. Tuyển chọn URL HLS (.m3u8) theo đúng thứ tự ưu tiên FairPlay trên fptplay.vn (6195-e5581bdb4a15b3c8.js)
         let h265Candidates: [String]
         let h264Candidates: [String]
 
-        if isDrmContent {
+        if effectiveIsDrm {
             h265Candidates = [
                 (sdata["url_hls_drm_dolby_vision"] as? String) ?? "",
                 (sdata["url_hls_drm_h265_hdr_10_plus"] as? String) ?? "",
@@ -2408,9 +2552,9 @@ public final class FPTDirectClient {
         }
 
         // Tuyệt đối chỉ nhận luồng .m3u8 hợp lệ cho AVPlayer trên tvOS, không bao giờ chọn .mpd (MPEG-DASH)
-        let rawHls4K = h265Candidates.first(where: { isPlayableHls($0) }) ?? ""
-        let rawHlsH264 = h264Candidates.first(where: { isPlayableHls($0) }) ?? ""
-        let isPreviewStream = rawHls4K.contains("-pre-") || rawHlsH264.contains("-pre-")
+        let firstPlayable4K = h265Candidates.first(where: { isPlayableHls($0) }) ?? ""
+        let firstPlayableH264 = h264Candidates.first(where: { isPlayableHls($0) }) ?? ""
+        let isPreviewStream = firstPlayable4K.contains("-pre-") || firstPlayableH264.contains("-pre-")
 
         // Nếu chưa đăng nhập và máy chủ trả 401 hoặc chỉ trả bản xem thử (-pre-), nhắc đăng nhập tài khoản chính chủ để xem trọn bộ
         if !config.isAuthenticated && (httpSt == 401 || isPreviewStream || !requireVipPlan.isEmpty) {
@@ -2422,37 +2566,37 @@ public final class FPTDirectClient {
         }
 
         // Nếu đã đăng nhập nhưng gói cước chưa bao gồm phim VIP và không có luồng HLS
-        if (httpSt == 401 || httpSt == 406) && rawHls4K.isEmpty && rawHlsH264.isEmpty {
+        if (httpSt == 401 || httpSt == 406) && firstPlayable4K.isEmpty && firstPlayableH264.isEmpty {
             let msg = (streamPayload["msg"] as? String) ?? "Tài khoản FPT Play hiện tại chưa có gói xem bộ phim này (\(requireVipPlan))."
             throw NSError(domain: "FPTDirectClient", code: httpSt, userInfo: [NSLocalizedDescriptionKey: msg])
         }
 
-        let sessionToken = (sdata["session"] as? String) ?? ""
-        let merchant = (sdata["merchant"] as? String) ?? ""
-        let streamSession = (sdata["stream_session"] as? String) ?? ""
-
-        // Khóa cứng biến thể cao nhất trong master .m3u8 (loại bỏ 480p/720p) để không bao giờ bị tụt chất lượng
-        async let locked4KTask = lockMasterPlaylistToHighestVariant(masterUrl: rawHls4K, streamSession: streamSession)
-        async let lockedH264Task = lockMasterPlaylistToHighestVariant(masterUrl: rawHlsH264, streamSession: streamSession)
+        // Khóa cứng biến thể cao nhất trong master .m3u8 (loại bỏ 480p/720p, giữ đủ các nhóm âm thanh Stereo & 5.1 ở cùng độ phân giải 4K)
+        // và tự động bỏ qua ứng viên .m3u8 bị 404 trên CDN (ví dụ url_hls_h265 chết khi url_hls_drm_h265 sống).
+        async let locked4KTask = resolveFirstReachableLockedHls(candidates: h265Candidates, streamSession: streamSession)
+        async let lockedH264Task = resolveFirstReachableLockedHls(candidates: h264Candidates, streamSession: streamSession)
         let (locked4K, lockedH264) = await (locked4KTask, lockedH264Task)
 
-        let hls4K = locked4K.isReachable ? locked4K.lockedUrl : rawHls4K
+        let rawHls4K = !locked4K.rawUrl.isEmpty ? locked4K.rawUrl : firstPlayable4K
+        let rawHlsH264 = !lockedH264.rawUrl.isEmpty ? lockedH264.rawUrl : firstPlayableH264
+        let hls4K = locked4K.isReachable ? locked4K.lockedUrl : ""
         let hlsH264 = lockedH264.isReachable ? lockedH264.lockedUrl : rawHlsH264
-        let hasTrue4KVod = locked4K.isReachable && locked4K.maxHeight >= 1440
+        let hasTrue4KVod = locked4K.isReachable && (locked4K.maxHeight >= 1440 || title.lowercased().contains("4k"))
+        let effectiveHls4K = hasTrue4KVod ? hls4K : ""
 
         let primaryHls: String
         let fallbackHls: String
         let rawPrimaryHls: String
         let is4K: Bool
 
-        if prefer4K && !hls4K.isEmpty && hasTrue4KVod {
-            primaryHls = hls4K
+        if prefer4K && !effectiveHls4K.isEmpty {
+            primaryHls = effectiveHls4K
             fallbackHls = !hlsH264.isEmpty ? hlsH264 : rawHls4K
             rawPrimaryHls = rawHls4K
             is4K = true
         } else if !hlsH264.isEmpty {
             primaryHls = hlsH264
-            fallbackHls = !hls4K.isEmpty ? hls4K : rawHlsH264
+            fallbackHls = !effectiveHls4K.isEmpty ? effectiveHls4K : rawHlsH264
             rawPrimaryHls = rawHlsH264
             is4K = false
         } else if !hls4K.isEmpty {
@@ -2466,7 +2610,7 @@ public final class FPTDirectClient {
         }
 
         // Chỉ kích hoạt FairPlay DRM khi nội dung có cờ DRM (hoặc URL là luồng DRM) và có session + merchant
-        let shouldEnableDrm = (isDrmContent || rawPrimaryHls.lowercased().contains("drm"))
+        let shouldEnableDrm = (effectiveIsDrm || rawPrimaryHls.lowercased().contains("drm"))
             && !sessionToken.isEmpty
             && !merchant.isEmpty
 
@@ -2485,7 +2629,7 @@ public final class FPTDirectClient {
             title: title,
             hlsUrl: primaryHls,
             fallbackHlsUrl: fallbackHls.isEmpty ? nil : fallbackHls,
-            hls4KUrl: hls4K.isEmpty ? nil : hls4K,
+            hls4KUrl: effectiveHls4K.isEmpty ? nil : effectiveHls4K,
             hlsH264Url: hlsH264.isEmpty ? nil : hlsH264,
             is4K: is4K,
             mediaHeaders: streamSession.isEmpty ? [:] : ["x-id": streamSession],
@@ -2618,11 +2762,13 @@ public final class FPTDirectClient {
             return !trimmed.isEmpty && trimmed.contains(".m3u8") && !trimmed.contains(".mpd")
         }
 
-        let extractHlsCandidates: ([String: Any]) -> (raw4K: String, rawH264: String, rawClear: String) = { [weak self] dict in
-            guard let self = self else { return ("", "", "") }
+        let buildCandidateArrays: ([String: Any]) -> (h265Cands: [String], h264Cands: [String], clearCands: [String]) = { [weak self] dict in
+            guard let self = self else { return ([], [], []) }
+            let dictHasDrmSession = !((dict["session"] as? String) ?? "").isEmpty && !((dict["merchant"] as? String) ?? "").isEmpty
+            let effectiveDrm = isDrmContent || dictHasDrmSession
             let h265Cands: [String]
             let h264Cands: [String]
-            if isDrmContent {
+            if effectiveDrm {
                 h265Cands = [
                     (dict["url_hls_drm_dolby_vision"] as? String) ?? "",
                     (dict["url_hls_drm_h265_hdr_10_plus"] as? String) ?? "",
@@ -2676,37 +2822,76 @@ public final class FPTDirectClient {
                 (dict["url_clean"] as? String) ?? "",
                 self.dashToHlsUrl((dict["url_dash_no_drm"] as? String) ?? "")
             ]
-            return (
-                h265Cands.first(where: { isPlayableHls($0) }) ?? "",
-                h264Cands.first(where: { isPlayableHls($0) }) ?? "",
-                clearCands.first(where: { isPlayableHls($0) }) ?? ""
-            )
+            return (h265Cands, h264Cands, clearCands)
         }
 
-        // 1. Gọi cổng SmartTV (/api/v7.1_stad/stream/tv/...) trước để lấy đồng bộ luồng 4K HEVC (url_dash_drm_h265 -> hls_h_drm/index.m3u8)
-        //    và luồng 1080p50 (url -> hls_a_drm/index.m3u8) cùng chung 1 session & stream_session chuẩn SmartTV 4K!
-        var (httpSt, streamPayload) = (try? await requestJSON(
+        // 1. Gọi cổng Apple iOS/tvOS (/api/v7.1_ios/stream/tv/...) trước tiên!
+        //    Thực nghiệm trên tài khoản VIP chứng minh:
+        //    - Cổng /api/v7.1_stad/ hiện trả Low-Latency CMAF .mpd (cmaf-hvc-drm/index.mpd) không thể đổi đuôi sang .m3u8 cho epl-hn-01-4k.
+        //    - Cổng /api/v7.1_w/ chỉ trả 1080p H.264 (web-hls-drm/index.m3u8) và KHÔNG trả luồng 4K HEVC cho epl-hn-01-4k.
+        //    - Chỉ cổng /api/v7.1_ios/ trả đồng thời cả hai luồng FairPlay HLS (.m3u8) chuẩn gốc Apple:
+        //      + url_hls_drm_h265: .../EPL_HN_01_4K_H265/hls_h_drm/index.m3u8 (True 4K 3840x2160 @ 50fps HEVC FairPlay)
+        //      + url:              .../EPL_HN_01_4K_H264/hls_a_drm/index.m3u8 (Full HD 1920x1080 @ 50fps H.264 FairPlay)
+        var (httpSt, streamPayload) = (try? await requestIOSJSON(
             config: config,
             route: "stream/tv/\(channelId)/\(autoProfile)",
-            extraQuery: streamQuery
+            extraQuery: streamQuery,
+            authenticated: config.isAuthenticated
         )) ?? (500, [:])
 
         var statusVal = String(describing: streamPayload["status"] ?? "0")
         var sdata = (streamPayload["data"] as? [String: Any]) ?? [:]
-        var (rawHls4K, rawHlsH264, rawHlsClear) = extractHlsCandidates(sdata)
+        var (h265Cands, h264Cands, clearCands) = buildCandidateArrays(sdata)
         var streamSession = (sdata["stream_session"] as? String) ?? ""
 
-        let stad4KInput = rawHls4K
-        let stadH264Input = rawHlsH264
-        let stadSessionInput = streamSession
-        async let initial4KLock = lockMasterPlaylistToHighestVariant(masterUrl: stad4KInput, streamSession: stadSessionInput)
-        async let initialH264Lock = lockMasterPlaylistToHighestVariant(masterUrl: stadH264Input, streamSession: stadSessionInput)
+        let iosH265Cands = h265Cands
+        let iosH264Cands = h264Cands
+        let iosSessionInput = streamSession
+        async let initial4KLock = resolveFirstReachableLockedHls(candidates: iosH265Cands, streamSession: iosSessionInput)
+        async let initialH264Lock = resolveFirstReachableLockedHls(candidates: iosH264Cands, streamSession: iosSessionInput)
         var (locked4K, lockedH264) = await (initial4KLock, initialH264Lock)
 
-        // 2. Nếu cổng SmartTV không trả về .m3u8 hợp lệ (ví dụ kênh có chữ ký .mpd?sign=...), gọi cổng Web/Safari (/api/v7.1_w/stream/tv/...)
-        //    và thay thế đồng bộ toàn bộ sdata + session để không bao giờ trộn lẫn session giữa 2 cổng!
+        // 2. Nếu cổng iOS không có luồng sống (ví dụ nhóm kênh quốc tế Qnet/CastLabs như HBO, Max by HBO, CNN, BBC News, Warner TV
+        //    trả url rỗng trên /api/v7.1_ios/ nhưng trả url_sub FairPlay .m3u8 trên /api/v7.1_stad/), gọi tiếp /api/v7.1_stad/ đồng bộ!
+        var stadPayload: [String: Any] = [:]
+        if statusVal != "1" || (!locked4K.isReachable && !lockedH264.isReachable) {
+            let (stadSt, fetchedStadPayload) = (try? await requestJSON(
+                config: config,
+                route: "stream/tv/\(channelId)/\(autoProfile)",
+                extraQuery: streamQuery,
+                authenticated: config.isAuthenticated
+            )) ?? (500, [:])
+            stadPayload = fetchedStadPayload
+            let stadStatusVal = String(describing: stadPayload["status"] ?? "0")
+            let stadData = (stadPayload["data"] as? [String: Any]) ?? [:]
+            if stadStatusVal == "1" && !stadData.isEmpty {
+                let (sH265Cands, sH264Cands, sClearCands) = buildCandidateArrays(stadData)
+                let stadSessionInput = (stadData["stream_session"] as? String) ?? ""
+                async let stad4KLock = resolveFirstReachableLockedHls(candidates: sH265Cands, streamSession: stadSessionInput)
+                async let stadH264Lock = resolveFirstReachableLockedHls(candidates: sH264Cands, streamSession: stadSessionInput)
+                let (sLocked4K, sLockedH264) = await (stad4KLock, stadH264Lock)
+
+                if sLocked4K.isReachable || sLockedH264.isReachable || (!locked4K.isReachable && !lockedH264.isReachable) {
+                    httpSt = stadSt
+                    statusVal = stadStatusVal
+                    streamPayload = stadPayload
+                    sdata = stadData
+                    h265Cands = sH265Cands
+                    h264Cands = sH264Cands
+                    clearCands = sClearCands
+                    streamSession = stadSessionInput
+                    locked4K = sLocked4K
+                    lockedH264 = sLockedH264
+                }
+            } else if statusVal != "1" && !stadPayload.isEmpty {
+                httpSt = stadSt
+                streamPayload = stadPayload
+            }
+        }
+
+        // 3. Dự phòng cuối qua cổng Web/Safari (/api/v7.1_w/stream/tv/...) nếu cả 2 cổng trên chưa có luồng .m3u8 phản hồi HTTP 200
         var webPayload: [String: Any] = [:]
-        if statusVal != "1" || (!locked4K.isReachable && !lockedH264.isReachable && rawHlsClear.isEmpty) {
+        if statusVal != "1" || (!locked4K.isReachable && !lockedH264.isReachable) {
             let (webSt, fetchedWebPayload) = (try? await requestWebJSON(
                 config: config,
                 route: "stream/tv/\(channelId)/\(autoProfile)",
@@ -2717,28 +2902,39 @@ public final class FPTDirectClient {
             let webStatusVal = String(describing: webPayload["status"] ?? "0")
             let webData = (webPayload["data"] as? [String: Any]) ?? [:]
             if webStatusVal == "1" && !webData.isEmpty {
-                let (w4K, wH264, wClear) = extractHlsCandidates(webData)
-                if !w4K.isEmpty || !wH264.isEmpty || !wClear.isEmpty {
+                let (wH265Cands, wH264Cands, wClearCands) = buildCandidateArrays(webData)
+                let webSessionInput = (webData["stream_session"] as? String) ?? ""
+                async let web4KLock = resolveFirstReachableLockedHls(candidates: wH265Cands, streamSession: webSessionInput)
+                async let webH264Lock = resolveFirstReachableLockedHls(candidates: wH264Cands, streamSession: webSessionInput)
+                let (wLocked4K, wLockedH264) = await (web4KLock, webH264Lock)
+
+                if wLocked4K.isReachable || wLockedH264.isReachable || (!locked4K.isReachable && !lockedH264.isReachable) {
                     httpSt = webSt
                     statusVal = webStatusVal
                     streamPayload = webPayload
                     sdata = webData
-                    rawHls4K = w4K
-                    rawHlsH264 = wH264
-                    rawHlsClear = wClear
-                    let webSessionInput = (sdata["stream_session"] as? String) ?? ""
+                    h265Cands = wH265Cands
+                    h264Cands = wH264Cands
+                    clearCands = wClearCands
                     streamSession = webSessionInput
-
-                    async let web4KLock = lockMasterPlaylistToHighestVariant(masterUrl: w4K, streamSession: webSessionInput)
-                    async let webH264Lock = lockMasterPlaylistToHighestVariant(masterUrl: wH264, streamSession: webSessionInput)
-                    (locked4K, lockedH264) = await (web4KLock, webH264Lock)
+                    locked4K = wLocked4K
+                    lockedH264 = wLockedH264
                 }
             }
         }
 
-        let hls4K = locked4K.isReachable ? locked4K.lockedUrl : rawHls4K
-        let hlsH264 = lockedH264.isReachable ? lockedH264.lockedUrl : rawHlsH264
-        let hlsClear = rawHlsClear
+        let firstPlayable4K = h265Cands.first(where: { isPlayableHls($0) }) ?? ""
+        let firstPlayableH264 = h264Cands.first(where: { isPlayableHls($0) }) ?? ""
+        let firstPlayableClear = clearCands.first(where: { isPlayableHls($0) }) ?? ""
+
+        let rawHls4K = !locked4K.rawUrl.isEmpty ? locked4K.rawUrl : firstPlayable4K
+        let rawHlsH264 = !lockedH264.rawUrl.isEmpty ? lockedH264.rawUrl : firstPlayableH264
+        let rawHlsClear = firstPlayableClear
+
+        // Với trận đấu theo lịch (!eventId.isEmpty), nếu CDN trả 404 (chưa bật encoder), giữ hls4K/hlsH264 rỗng để hiển thị Màn Hình Chờ Phát Sóng
+        let hls4K = locked4K.isReachable ? locked4K.lockedUrl : ""
+        let hlsH264 = lockedH264.isReachable ? lockedH264.lockedUrl : (eventId.isEmpty ? rawHlsH264 : "")
+        let hlsClear = eventId.isEmpty ? rawHlsClear : (lockedH264.isReachable ? rawHlsClear : "")
 
         let hasAnyStreamUrl = !hls4K.isEmpty || !hlsH264.isEmpty || !hlsClear.isEmpty
 
@@ -2746,7 +2942,10 @@ public final class FPTDirectClient {
         // hiển thị Màn Hình Tĩnh Chờ Phát Sóng (Poster sự kiện + Giờ thi đấu) giống hệt trên app điện thoại FPT Play!
         if !eventId.isEmpty && (!hasAnyStreamUrl || statusVal != "1") {
             if isUpcomingEvent || httpSt != 401 {
-                let serverMsg = (streamPayload["msg"] as? String) ?? (webPayload["msg"] as? String) ?? ""
+                let serverMsg = (streamPayload["msg"] as? String)
+                    ?? (stadPayload["msg"] as? String)
+                    ?? (webPayload["msg"] as? String)
+                    ?? ""
                 let waitMsg = !serverMsg.isEmpty
                     ? "\(serverMsg) • Lịch phát sóng: \(scheduleLabel)"
                     : "Trận đấu chưa mở luồng trực tiếp (Lịch phát sóng: \(scheduleLabel)). Màn hình sẽ tự động phát ngay khi trận đấu bắt đầu."
@@ -2779,32 +2978,36 @@ public final class FPTDirectClient {
         }
 
         guard statusVal == "1", hasAnyStreamUrl else {
-            let msg = (streamPayload["msg"] as? String) ?? (webPayload["msg"] as? String) ?? "Không xin được phiên phát từ FPT Play"
+            let msg = (streamPayload["msg"] as? String)
+                ?? (stadPayload["msg"] as? String)
+                ?? (webPayload["msg"] as? String)
+                ?? "Không xin được phiên phát từ FPT Play"
             throw NSError(domain: "FPTDirectClient", code: -2, userInfo: [NSLocalizedDescriptionKey: msg])
         }
 
         let hasTrue4K = locked4K.isReachable && (locked4K.maxHeight >= 1440 || channelId.lowercased().contains("4k") || title.lowercased().contains("4k"))
+        let effectiveHls4K = hasTrue4K ? hls4K : ""
 
         let primaryHls: String
         let fallbackHls: String
         let rawPrimaryHls: String
         let is4K: Bool
 
-        // Khi luồng có 4K thật (3840x2160 @ 50fps đã được khóa cứng trong FPTLocalManifestServer, loại bỏ hoàn toàn 480p/720p)
+        // Khi luồng có 4K thật (3840x2160 @ 50fps đã được khóa cứng trong FPTLocalManifestServer, loại bỏ hoàn toàn 480p/720p/1080p)
         // và người dùng bật ưu tiên 4K: phát ngay luồng 4K 2160p50 kèm dự phòng 1080p50 đã khóa nét!
-        if prefer4K && !hls4K.isEmpty && hasTrue4K {
-            primaryHls = hls4K
+        if prefer4K && !effectiveHls4K.isEmpty {
+            primaryHls = effectiveHls4K
             fallbackHls = !hlsH264.isEmpty ? hlsH264 : rawHls4K
             rawPrimaryHls = rawHls4K
             is4K = true
         } else if !hlsH264.isEmpty {
             primaryHls = hlsH264
-            fallbackHls = !hlsClear.isEmpty && hlsClear != hlsH264 ? hlsClear : (!hls4K.isEmpty ? hls4K : rawHlsH264)
+            fallbackHls = !hlsClear.isEmpty && hlsClear != hlsH264 ? hlsClear : (!effectiveHls4K.isEmpty ? effectiveHls4K : rawHlsH264)
             rawPrimaryHls = rawHlsH264
             is4K = false
         } else if !hlsClear.isEmpty {
             primaryHls = hlsClear
-            fallbackHls = !hls4K.isEmpty ? hls4K : ""
+            fallbackHls = !effectiveHls4K.isEmpty ? effectiveHls4K : ""
             rawPrimaryHls = rawHlsClear
             is4K = false
         } else if !hls4K.isEmpty {
@@ -2819,7 +3022,7 @@ public final class FPTDirectClient {
         let sessionToken = (sdata["session"] as? String) ?? ""
         let merchant = (sdata["merchant"] as? String) ?? ""
 
-        let shouldEnableDrm = (isDrmContent || rawPrimaryHls.lowercased().contains("drm"))
+        let shouldEnableDrm = (isDrmContent || (!sessionToken.isEmpty && !merchant.isEmpty) || rawPrimaryHls.lowercased().contains("drm"))
             && !sessionToken.isEmpty
             && !merchant.isEmpty
 
@@ -2838,7 +3041,7 @@ public final class FPTDirectClient {
             title: title,
             hlsUrl: primaryHls,
             fallbackHlsUrl: fallbackHls.isEmpty ? nil : fallbackHls,
-            hls4KUrl: hls4K.isEmpty ? nil : hls4K,
+            hls4KUrl: effectiveHls4K.isEmpty ? nil : effectiveHls4K,
             hlsH264Url: hlsH264.isEmpty ? nil : hlsH264,
             is4K: is4K,
             mediaHeaders: streamSession.isEmpty ? [:] : ["x-id": streamSession],

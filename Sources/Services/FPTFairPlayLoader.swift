@@ -95,6 +95,13 @@ public final class FPTFairPlayLoader: NSObject, AVContentKeySessionDelegate {
                 } else {
                     let primary = assetId.isEmpty ? skdString.replacingOccurrences(of: "skd://", with: "") : assetId
                     candidateContentIds.append(primary)
+                    let stripped = skdString.replacingOccurrences(of: "skd://", with: "")
+                    if !stripped.isEmpty && !candidateContentIds.contains(stripped) {
+                        candidateContentIds.append(stripped)
+                    }
+                    if !skdString.isEmpty && !candidateContentIds.contains(skdString) {
+                        candidateContentIds.append(skdString)
+                    }
                 }
 
                 var lastError: Error?

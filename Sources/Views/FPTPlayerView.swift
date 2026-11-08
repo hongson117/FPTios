@@ -355,7 +355,7 @@ struct FPTAVPlayerRepresentable: UIViewControllerRepresentable {
             var actions: [UIAction] = []
             let isPlaying4K = (!url4K.isEmpty && activePlayingUrl == url4K) || (resolved.is4K && activePlayingUrl == resolved.hlsUrl)
 
-            if !url4K.isEmpty && (resolved.is4K || resolved.channelId.lowercased().contains("4k") || resolved.title.lowercased().contains("4k")) {
+            if !url4K.isEmpty {
                 let act4K = UIAction(
                     title: isPlaying4K ? "▶ 4K UHD 50fps — Khóa nét 2160p (Đang phát)" : "4K UHD 50fps — Khóa nét 2160p",
                     image: UIImage(systemName: "4k.tv.fill")
