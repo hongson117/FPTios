@@ -61,5 +61,7 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>FTVOS kết nối trực tiếp tới máy chủ FPT Play trên Apple TV</string>
+	<key>FTVOSEnableMCP</key>
+	<false/>
 </dict>
 </plist>

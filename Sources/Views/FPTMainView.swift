@@ -248,7 +248,7 @@ public struct FPTMainView: View {
 
     // MARK: - 1. Thanh Điều Hướng Dọc Bên Trái Chuẩn FPT Play Android TV (G2)
     private var g2LeftNavigationSidebar: some View {
-        let navItems: [(id: String, icon: String, title: String)] = [
+        var navItems: [(id: String, icon: String, title: String)] = [
             ("search", "magnifyingglass", "Tìm kiếm"),
             ("tv_guide", "tv", "Truyền hình"),
             ("home", "house.fill", "Trang chủ"),
@@ -258,9 +258,11 @@ public struct FPTMainView: View {
             ("vod_movies", "film.fill", "Phim lẻ"),
             ("intl_channels", "globe.asia.australia.fill", "Nước ngoài"),
             ("vn_channels", "antenna.radiowaves.left.and.right", "Trong nước"),
-            ("library", "bookmark.fill", "Thư viện"),
-            ("update", "dot.radiowaves.left.and.right", "Cập nhật luồng")
+            ("library", "bookmark.fill", "Thư viện")
         ]
+        if FPTDirectClient.isMCPEnabled {
+            navItems.append(("update", "dot.radiowaves.left.and.right", "Cập nhật luồng"))
+        }
 
         return VStack(spacing: 14) {
             // Avatar Mặt Cười Xanh FPT Play ở đỉnh thanh điều hướng (giống hệt screen-menu.png trên G2)
@@ -346,13 +348,18 @@ public struct FPTMainView: View {
 
             Spacer(minLength: 8)
 
-            // Logo FPT Play nhỏ dưới đáy thanh bên trái
-            Image("FPTLogo")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 132, height: 50)
-                .opacity(0.85)
-                .padding(.bottom, 22)
+            // Logo FPT Play nhỏ + Nhãn phiên bản (Gốc vs MCP) dưới đáy thanh bên trái
+            VStack(spacing: 4) {
+                Image("FPTLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 126, height: 44)
+                    .opacity(0.88)
+                Text(FPTDirectClient.isMCPEnabled ? "FTVOS 4K (BẢN MCP)" : "FTVOS 4K (BẢN GỐC)")
+                    .font(.system(size: 11, weight: .black, design: .rounded))
+                    .foregroundColor(FPTDirectClient.isMCPEnabled ? fptOrange : Color.green)
+            }
+            .padding(.bottom, 18)
         }
         .frame(width: 284)
         .frame(maxHeight: .infinity)
@@ -502,36 +509,38 @@ public struct FPTMainView: View {
                     .buttonStyle(FPTG2CardButtonStyle())
                 }
 
-                // Nút Cập Nhật Link Trực Tiếp Mới Nhất Cho Tài Khoản Chính Chủ Qua Cloudflare MCP (fptstream)
-                Button {
-                    showAccountPanel = false
-                    showUpdateSheet = true
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "dot.radiowaves.left.and.right")
-                            .font(.system(size: 22, weight: .bold))
-                            .foregroundColor(fptOrange)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Cập Nhật Link Trực Tiếp Mới Nhất (Tài Khoản Chính Chủ)")
-                                .font(.system(size: 16, weight: .bold))
-                                .foregroundColor(.white)
-                                .lineLimit(1)
-                            Text("Cloudflare MCP fptstream #\(service.remoteStreamConfig.configVersion) • Cổng Live: \(service.remoteStreamConfig.liveGatewayOrder.map { $0.uppercased() }.joined(separator: "→"))")
-                                .font(.system(size: 12))
-                                .foregroundColor(.green)
-                                .lineLimit(1)
+                // Nút Cập Nhật Link Trực Tiếp Mới Nhất Cho Tài Khoản Chính Chủ Qua Cloudflare MCP (chỉ hiện trên bản MCP)
+                if FPTDirectClient.isMCPEnabled {
+                    Button {
+                        showAccountPanel = false
+                        showUpdateSheet = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "dot.radiowaves.left.and.right")
+                                .font(.system(size: 22, weight: .bold))
+                                .foregroundColor(fptOrange)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Cập Nhật Link Trực Tiếp Mới Nhất (Tài Khoản Chính Chủ)")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .lineLimit(1)
+                                Text("Cloudflare MCP fptstream #\(service.remoteStreamConfig.configVersion) • Cổng Live: \(service.remoteStreamConfig.liveGatewayOrder.map { $0.uppercased() }.joined(separator: "→"))")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.green)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                                .font(.system(size: 20))
+                                .foregroundColor(fptOrange)
                         }
-                        Spacer()
-                        Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(fptOrange)
+                        .padding(14)
+                        .frame(maxWidth: .infinity)
+                        .background(Color.white.opacity(0.10))
+                        .cornerRadius(12)
                     }
-                    .padding(14)
-                    .frame(maxWidth: .infinity)
-                    .background(Color.white.opacity(0.10))
-                    .cornerRadius(12)
+                    .buttonStyle(FPTG2CardButtonStyle())
                 }
-                .buttonStyle(FPTG2CardButtonStyle())
 
                 HStack {
                     Text("SỰ KIỆN & THÔNG BÁO NỔI BẬT")
@@ -722,13 +731,13 @@ public struct FPTMainView: View {
                             .foregroundColor(.white)
                             .shadow(color: FPTTheme.accent2.opacity(0.5), radius: 8, x: 0, y: 2)
 
-                        Text(active.is4K ? "4K UHD" : "1080p FHD")
-                            .font(.system(size: 12, weight: .black))
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 4)
-                            .background(Color.white.opacity(0.18))
-                            .foregroundColor(.white)
-                            .cornerRadius(5)
+                        Text(active.is4K ? "4K UHD • 50FPS" : "1080p FHD")
+                            .font(.system(size: 13, weight: .black))
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 5)
+                            .background(active.is4K ? fptOrange : Color.white.opacity(0.18))
+                            .foregroundColor(active.is4K ? .black : .white)
+                            .cornerRadius(6)
 
                         if !active.statusText.isEmpty {
                             Text(active.statusText)
@@ -891,6 +900,16 @@ public struct FPTMainView: View {
                     g2WatchHistoryRail
                 }
 
+                // Dải 3A: Trận Đấu & Highlight Ngoại Hạng Anh 4K UHD (2160p50)
+                let epl4KItems = eplHighlightsList.filter { $0.is4K }
+                if !epl4KItems.isEmpty {
+                    g2HorizontalLandscapeRail(
+                        title: "🔥 Ngoại Hạng Anh 4K UHD — Xem Lại & Highlight (2160p50)",
+                        items: epl4KItems,
+                        showTimePill: true
+                    )
+                }
+
                 // Dải 3: Chương trình & Sự kiện trực tiếp nổi bật (giống screen-menu.png & screen-football.png)
                 if !liveEventsList.isEmpty {
                     g2HorizontalLandscapeRail(
@@ -1026,59 +1045,80 @@ public struct FPTMainView: View {
     private var g2LiveSportsScreen: some View {
         let liveNow = liveEventsList.filter { $0.isLive }
         let upcoming = liveEventsList.filter { !$0.isLive }
+        let epl4KMatches = eplHighlightsList.filter { $0.is4K }
+        let live4KEvents = liveEventsList.filter { $0.is4K }
 
         return ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 18) {
-                g2HeroSpotlightBanner(for: heroChannel ?? liveEventsList.first, sectionLabel: "Trực Tiếp Thể Thao")
+                g2HeroSpotlightBanner(for: heroChannel ?? epl4KMatches.first ?? live4KEvents.first ?? liveEventsList.first, sectionLabel: "Trực Tiếp & Ngoại Hạng Anh 4K UHD")
 
-                // Thanh công cụ 1 chạm: Cập nhật link trực tiếp mới nhất cho tài khoản chính chủ qua Cloudflare MCP (fptstream)
-                HStack(spacing: 16) {
-                    Button {
-                        Task {
-                            await service.syncLiveStreamsWithMCP(manual: true)
-                        }
-                    } label: {
-                        HStack(spacing: 10) {
-                            if service.isCheckingUpdate {
-                                ProgressView()
-                            } else {
-                                Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
-                                    .font(.system(size: 20, weight: .bold))
+                // Thanh công cụ 1 chạm: Cập nhật link trực tiếp mới nhất cho tài khoản chính chủ qua Cloudflare MCP (chỉ hiện trên bản MCP)
+                if FPTDirectClient.isMCPEnabled {
+                    HStack(spacing: 16) {
+                        Button {
+                            Task {
+                                await service.syncLiveStreamsWithMCP(manual: true)
                             }
-                            Text(service.isCheckingUpdate
-                                 ? "Đang dò & cập nhật link trực tiếp mới nhất..."
-                                 : "Cập nhật link trực tiếp mới nhất (Tài khoản chính chủ)")
-                                .font(.system(size: 16, weight: .bold))
+                        } label: {
+                            HStack(spacing: 10) {
+                                if service.isCheckingUpdate {
+                                    ProgressView()
+                                } else {
+                                    Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                                        .font(.system(size: 20, weight: .bold))
+                                }
+                                Text(service.isCheckingUpdate
+                                     ? "Đang dò & cập nhật link trực tiếp mới nhất..."
+                                     : "Cập nhật link trực tiếp mới nhất (Tài khoản chính chủ)")
+                                    .font(.system(size: 16, weight: .bold))
+                            }
+                            .padding(.horizontal, 22)
+                            .padding(.vertical, 12)
+                            .background(fptOrange)
+                            .foregroundColor(.black)
+                            .cornerRadius(12)
                         }
-                        .padding(.horizontal, 22)
-                        .padding(.vertical, 12)
-                        .background(fptOrange)
-                        .foregroundColor(.black)
-                        .cornerRadius(12)
-                    }
-                    .buttonStyle(FPTG2CardButtonStyle())
+                        .buttonStyle(FPTG2CardButtonStyle())
 
-                    Button {
-                        showUpdateSheet = true
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "dot.radiowaves.left.and.right")
-                                .foregroundColor(.green)
-                            Text("Trạng thái luồng MCP fptstream (#\(service.remoteStreamConfig.configVersion))")
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundColor(.white)
+                        Button {
+                            showUpdateSheet = true
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "dot.radiowaves.left.and.right")
+                                    .foregroundColor(.green)
+                                Text("Trạng thái luồng MCP fptstream (#\(service.remoteStreamConfig.configVersion))")
+                                    .font(.system(size: 15, weight: .bold))
+                                    .foregroundColor(.white)
+                            }
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 12)
+                            .background(Color.white.opacity(0.12))
+                            .cornerRadius(12)
                         }
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 12)
-                        .background(Color.white.opacity(0.12))
-                        .cornerRadius(12)
-                    }
-                    .buttonStyle(FPTG2CardButtonStyle())
+                        .buttonStyle(FPTG2CardButtonStyle())
 
-                    Spacer()
+                        Spacer()
+                    }
+                    .padding(.horizontal, 36)
+                    .focusSection()
                 }
-                .padding(.horizontal, 36)
-                .focusSection()
+
+                // Khối 4K UHD phát được ngay 24/7 (Liverpool - Arsenal, Leeds - Tottenham, Chelsea - Man Utd...)
+                if !epl4KMatches.isEmpty {
+                    g2HorizontalLandscapeRail(
+                        title: "🔥 Trận Đấu & Highlight Ngoại Hạng Anh 4K UHD (2160p50 — Phát Ngay)",
+                        items: epl4KMatches,
+                        showTimePill: true
+                    )
+                }
+
+                if !live4KEvents.isEmpty {
+                    g2HorizontalLandscapeRail(
+                        title: "📡 Sự Kiện Trực Tiếp 4K UHD Theo Lịch Phát Sóng (\(live4KEvents.count))",
+                        items: live4KEvents,
+                        showTimePill: true
+                    )
+                }
 
                 if !liveNow.isEmpty {
                     g2HorizontalLandscapeRail(
@@ -2346,39 +2386,63 @@ struct FPTG2LandscapePosterCard: View {
                     fallbackPoster
                 }
 
-                // Pill thời gian ở góc dưới bên trái & Badge 4K góc dưới phải (giống hệt screen-football.png trên G2!)
-                HStack(alignment: .bottom) {
-                    if let hist = historyItem {
-                        Text(hist.progressLabel)
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color.black.opacity(0.84))
-                            .cornerRadius(6)
-                    } else if showTimePill || !channel.statusText.isEmpty {
-                        Text(channel.statusText)
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color(red: 0.08, green: 0.08, blue: 0.09).opacity(0.88))
-                            .cornerRadius(6)
+                // Nhãn 4K UHD góc trên bên trái & Pill thời gian + Badge 4K UHD góc dưới phải
+                VStack {
+                    HStack {
+                        if channel.is4K {
+                            Text("4K UHD • 50FPS")
+                                .font(.system(size: 11, weight: .black))
+                                .foregroundColor(.black)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 4)
+                                .background(
+                                    LinearGradient(
+                                        colors: [fptOrange, Color(red: 1.0, green: 0.82, blue: 0.32)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                                .cornerRadius(5)
+                                .shadow(color: .black.opacity(0.6), radius: 4, x: 0, y: 2)
+                        }
+                        Spacer()
                     }
 
                     Spacer()
 
-                    Text(channel.is4K ? "4K" : "1080p")
-                        .font(.system(size: 12, weight: .black))
-                        .foregroundColor(Color(red: 0.95, green: 0.80, blue: 0.45))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.black.opacity(0.82))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4)
-                                .stroke(Color(red: 0.95, green: 0.80, blue: 0.45).opacity(0.6), lineWidth: 1)
-                        )
-                        .cornerRadius(4)
+                    HStack(alignment: .bottom) {
+                        if let hist = historyItem {
+                            Text(hist.progressLabel)
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Color.black.opacity(0.84))
+                                .cornerRadius(6)
+                        } else if showTimePill || !channel.statusText.isEmpty {
+                            Text(channel.statusText)
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Color(red: 0.08, green: 0.08, blue: 0.09).opacity(0.88))
+                                .cornerRadius(6)
+                        }
+
+                        Spacer()
+
+                        Text(channel.is4K ? "4K UHD" : "1080p")
+                            .font(.system(size: 12, weight: .black))
+                            .foregroundColor(channel.is4K ? .black : Color(red: 0.95, green: 0.80, blue: 0.45))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(channel.is4K ? fptOrange : Color.black.opacity(0.82))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .stroke(Color(red: 0.95, green: 0.80, blue: 0.45).opacity(0.8), lineWidth: 1)
+                            )
+                            .cornerRadius(4)
+                    }
                 }
                 .padding(10)
 

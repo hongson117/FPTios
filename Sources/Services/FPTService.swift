@@ -97,16 +97,21 @@ public final class FPTService: ObservableObject {
     }
 
     public func refreshAll(forceEvents: Bool = false) async {
-        let cfg = await FPTDirectClient.shared.syncRemoteStreamConfig()
-        self.remoteStreamConfig = cfg
+        if FPTDirectClient.isMCPEnabled {
+            let cfg = await FPTDirectClient.shared.syncRemoteStreamConfig()
+            self.remoteStreamConfig = cfg
+        }
         await fetchCatalog(forceEvents: forceEvents)
-        await syncLiveStreamsWithMCP(manual: false)
+        if FPTDirectClient.isMCPEnabled {
+            await syncLiveStreamsWithMCP(manual: false)
+        }
         if bootstrapConfig.isAuthenticated {
             await fetchLoggedInDevices()
         }
     }
 
     public func syncLiveStreamsWithMCP(manual: Bool = false) async {
+        guard FPTDirectClient.isMCPEnabled else { return }
         isCheckingUpdate = true
         defer { isCheckingUpdate = false }
         if manual {
@@ -358,11 +363,11 @@ public final class FPTService: ObservableObject {
             category: vodDetail.isSeries ? "Phim Bộ" : "Phim Lẻ",
             logo: vodDetail.poster,
             desc: vodDetail.desc,
-            is4K: false,
+            is4K: resolved.is4K,
             isDRM: vodDetail.isDrm,
             isLive: false,
-            statusText: episode.title,
-            resolution: vodDetail.country.isEmpty ? "Full HD (1080p)" : "\(vodDetail.country) • 1080p FHD",
+            statusText: resolved.is4K ? "4K UHD • \(episode.title)" : episode.title,
+            resolution: resolved.is4K ? "4K UHD (2160p50 HEVC)" : (vodDetail.country.isEmpty ? "Full HD (1080p)" : "\(vodDetail.country) • 1080p FHD"),
             fps: vodDetail.isSeries ? "Chọn Tập • TM/Phụ Đề" : "Phát Ngay • TM/Phụ Đề",
             isVod: true,
             isSeries: vodDetail.isSeries,
@@ -382,7 +387,33 @@ public final class FPTService: ObservableObject {
             channel: channel,
             prefer4K: prefer4K
         )
-        recordWatchHistory(channel: channel, episodeId: channel.episodeId, episodeTitle: channel.isVod ? "Phim lẻ" : "")
+        var historyChannel = channel
+        if resolved.is4K && !channel.is4K {
+            historyChannel = FPTChannel(
+                id: channel.id,
+                channelId: channel.channelId,
+                eventId: channel.eventId,
+                name: channel.name,
+                badge: channel.badge,
+                categoryId: channel.categoryId,
+                category: channel.category,
+                logo: channel.logo,
+                portraitLogo: channel.portraitLogo,
+                titleLogo: channel.titleLogo,
+                desc: channel.desc,
+                is4K: true,
+                isDRM: channel.isDRM,
+                isLive: channel.isLive,
+                statusText: channel.statusText.contains("4K") ? channel.statusText : "4K UHD • \(channel.statusText)",
+                resolution: "4K UHD (2160p50 HEVC)",
+                fps: "50fps • FairPlay 4K",
+                isVod: channel.isVod,
+                isSeries: channel.isSeries,
+                vodId: channel.vodId,
+                episodeId: channel.episodeId
+            )
+        }
+        recordWatchHistory(channel: historyChannel, episodeId: channel.episodeId, episodeTitle: channel.isVod ? "Phim lẻ" : "")
         appendLog("✅ [FTVOS] Nhận luồng HLS (\(resolved.is4K ? "4K HEVC" : "Full HD")) • DRM: \(resolved.drm?.provider ?? "clear")")
         return resolved
     }
@@ -428,7 +459,9 @@ public final class FPTService: ObservableObject {
                 self.statusMessage = "🟢 Đã đăng nhập FTVOS (\(phoneLabel))"
                 appendLog("✅ Đăng nhập FPT Play VIP trực tiếp trên Apple TV thành công (\(phoneLabel))!")
                 await fetchCatalog(forceEvents: true)
-                await syncLiveStreamsWithMCP(manual: true)
+                if FPTDirectClient.isMCPEnabled {
+                    await syncLiveStreamsWithMCP(manual: true)
+                }
                 await fetchLoggedInDevices()
             } else {
                 self.statusMessage = status.message ?? statusMessage
@@ -459,7 +492,9 @@ public final class FPTService: ObservableObject {
                 self.statusMessage = "🟢 Đã đăng nhập FTVOS (\(phoneLabel))"
                 appendLog("✅ Đã gỡ thiết bị cũ và đăng nhập thành công (\(phoneLabel))!")
                 await fetchCatalog(forceEvents: true)
-                await syncLiveStreamsWithMCP(manual: true)
+                if FPTDirectClient.isMCPEnabled {
+                    await syncLiveStreamsWithMCP(manual: true)
+                }
                 await fetchLoggedInDevices()
             } else {
                 self.statusMessage = status.message ?? statusMessage

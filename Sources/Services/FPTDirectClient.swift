@@ -216,13 +216,45 @@ public final class FPTDirectClient {
     // Cấu hình điều phối luồng trực tiếp từ Cloudflare MCP (fptstream)
     public static let mcpBaseUrl = "https://fptstream.hongson1812.workers.dev"
     public static let mcpApiKey = "ftvos_sec_9c41e82a75b3d019f6a4c28e50b1"
+    public static var isMCPEnabled: Bool {
+        (Bundle.main.object(forInfoDictionaryKey: "FTVOSEnableMCP") as? Bool) ?? false
+    }
+
+    // Danh sách các trận Xem lại & Highlight Ngoại Hạng Anh + Phim 4K UHD thực tế trên FPT Play (master_4k_...m3u8 3840x2160 50fps)
+    public let known4KEplVodIds: Set<String> = [
+        "6ae779e48c8ad44bae7d7792", // Liverpool - Arsenal (Xem lại trận đấu 4K UHD)
+        "6ae77e4ccda1699992379e16", // Liverpool - Arsenal: Fan Cứng Pháo thủ (4K UHD)
+        "6ae779f30b4701e050a50795", // Liverpool - Arsenal: Fan Cứng The Kop (4K UHD)
+        "6ae779b8cda1699992379e15", // Liverpool - Arsenal Highlights (4K UHD)
+        "6aef325e02a96920edcab3f8", // Leeds United - Tottenham Hotspur (Xem lại trận đấu 4K UHD)
+        "6aef3230737884e0c96f6c4c", // Leeds United - Tottenham Hotspur Highlights (4K UHD)
+        "6aef76b23c5fbe375121d0e3", // Nottingham Forest - Manchester City Highlights (4K UHD)
+        "6ae5fb111149b9ba2a9d7ae8", // Tottenham Hotspur - Crystal Palace Highlights (4K UHD)
+        "6ae5f890f4a2373e21af196e", // Chelsea - Manchester United Highlights (4K UHD)
+        "6ade266fad74a0facc83c28b"  // Manchester United - Bournemouth Highlights (4K UHD)
+    ]
+
+    public let known4KVodIds: Set<String> = [
+        "6ae779e48c8ad44bae7d7792",
+        "6ae77e4ccda1699992379e16",
+        "6ae779f30b4701e050a50795",
+        "6ae779b8cda1699992379e15",
+        "6aef325e02a96920edcab3f8",
+        "6aef3230737884e0c96f6c4c",
+        "6aef76b23c5fbe375121d0e3",
+        "6ae5fb111149b9ba2a9d7ae8",
+        "6ae5f890f4a2373e21af196e",
+        "6ade266fad74a0facc83c28b",
+        "638eca467dc1f414df628c18"  // Cuộc Phiêu Lưu Của Nhà Croods (4K UHD)
+    ]
 
     public private(set) var remoteStreamConfig: FPTRemoteStreamConfig = FPTRemoteStreamConfig.defaultConfig()
     private static let savedDeviceKey = "ftvos_appletv_device_id_v2"
     private static let savedRemoteConfigKey = "ftvos_mcp_remote_stream_config_v2"
 
     private init() {
-        if let data = UserDefaults.standard.data(forKey: Self.savedRemoteConfigKey),
+        if Self.isMCPEnabled,
+           let data = UserDefaults.standard.data(forKey: Self.savedRemoteConfigKey),
            let saved = try? JSONDecoder().decode(FPTRemoteStreamConfig.self, from: data),
            saved.configVersion >= FPTRemoteStreamConfig.defaultConfig().configVersion {
             self.remoteStreamConfig = saved
@@ -231,13 +263,14 @@ public final class FPTDirectClient {
 
     private func applyAndSaveRemoteConfig(_ decoded: FPTRemoteStreamConfig) {
         self.remoteStreamConfig = decoded
-        if let encoded = try? JSONEncoder().encode(decoded) {
+        if Self.isMCPEnabled, let encoded = try? JSONEncoder().encode(decoded) {
             UserDefaults.standard.set(encoded, forKey: Self.savedRemoteConfigKey)
         }
     }
 
     // MARK: - Đồng bộ Cấu Hình Luồng Trực Tiếp Từ Cloudflare MCP (Kèm dự phòng GitHub)
     public func syncRemoteStreamConfig() async -> FPTRemoteStreamConfig {
+        guard Self.isMCPEnabled else { return remoteStreamConfig }
         let ts = Int(Date().timeIntervalSince1970)
         let mcpUrlStr = "\(Self.mcpBaseUrl)/api/stream-config?key=\(Self.mcpApiKey)&t=\(ts)"
         if let mcpUrl = URL(string: mcpUrlStr) {
@@ -292,6 +325,9 @@ public final class FPTDirectClient {
         action: String,
         probedChannels: [[String: Any]]
     ) async -> (config: FPTRemoteStreamConfig, autoHealedCount: Int) {
+        guard Self.isMCPEnabled else {
+            return (remoteStreamConfig, 0)
+        }
         let urlStr = "\(Self.mcpBaseUrl)/api/stream-signal?key=\(Self.mcpApiKey)"
         guard let url = URL(string: urlStr) else {
             return (remoteStreamConfig, 0)
@@ -2140,21 +2176,21 @@ public final class FPTDirectClient {
                     let endInt = Int(String(describing: evData["end_time"] ?? item["end_time"] ?? ""))
 
                     var isLiveNow = true
-                    var matchStateBadge = "🔴 ĐANG TRỰC TIẾP"
+                    var matchStateBadge = is4K ? "🔴 TRỰC TIẾP 4K UHD" : "🔴 ĐANG TRỰC TIẾP"
                     var sortPriority = 0
                     if let bVal = beginInt {
                         let eVal = endInt ?? (bVal + 10800)
                         if now < Double(bVal - 900) {
                             isLiveNow = false
-                            matchStateBadge = "⏳ SẮP DIỄN RA"
+                            matchStateBadge = is4K ? "⏳ SẮP DIỄN RA • 4K UHD" : "⏳ SẮP DIỄN RA"
                             sortPriority = 1
                         } else if now <= Double(eVal) {
                             isLiveNow = true
-                            matchStateBadge = "🔴 ĐANG TRỰC TIẾP"
+                            matchStateBadge = is4K ? "🔴 TRỰC TIẾP 4K UHD" : "🔴 ĐANG TRỰC TIẾP"
                             sortPriority = 0
                         } else {
                             isLiveNow = false
-                            matchStateBadge = "✅ KẾT THÚC"
+                            matchStateBadge = is4K ? "✅ KẾT THÚC • 4K UHD" : "✅ KẾT THÚC"
                             sortPriority = 2
                         }
                     }
@@ -2178,19 +2214,22 @@ public final class FPTDirectClient {
                         is4K: is4K,
                         isDRM: isDrmEvent,
                         isLive: isLiveNow,
-                        statusText: scheduleStr,
-                        resolution: is4K ? "4K UHD (HEVC)" : "Full HD (1080p)",
-                        fps: isLiveNow ? "ĐANG TRỰC TIẾP" : "SẮP DIỄN RA"
+                        statusText: is4K ? "4K UHD • \(scheduleStr)" : scheduleStr,
+                        resolution: is4K ? "4K UHD (2160p50 HEVC)" : "Full HD (1080p)",
+                        fps: is4K ? (isLiveNow ? "50fps • ĐANG TRỰC TIẾP 4K" : "50fps • SẮP DIỄN RA 4K") : (isLiveNow ? "ĐANG TRỰC TIẾP" : "SẮP DIỄN RA")
                     )
                     scoredEvents.append((priority: sortPriority, beginTs: beginInt ?? Int(now), channel: ch))
                 }
             }
         }
 
-        // Sắp xếp các trận ĐANG TRỰC TIẾP (Pickleball, V.League, Ngoại Hạng Anh...) lên đầu tiên, sau đó đến SẮP DIỄN RA theo giờ gần nhất
+        // Sắp xếp các trận ĐANG TRỰC TIẾP lên đầu tiên, ưu tiên các trận 4K UHD trong cùng nhóm trạng thái
         scoredEvents.sort { a, b in
             if a.priority != b.priority {
                 return a.priority < b.priority
+            }
+            if a.channel.is4K != b.channel.is4K {
+                return a.channel.is4K && !b.channel.is4K
             }
             return a.beginTs < b.beginTs
         }
@@ -2321,6 +2360,7 @@ public final class FPTDirectClient {
                     fullDesc = "Phim bản quyền trên FPT Play. Hỗ trợ Thuyết minh & Phụ đề Tiếng Việt."
                 }
 
+                let is4KVodItem = title.lowercased().contains("4k") || known4KVodIds.contains(vodId)
                 let statusLabel = !durationStr.isEmpty ? durationStr : (isSeriesItem ? "Trọn bộ" : "Phim lẻ")
                 let subAudioTag = isSeriesItem ? "Chọn Tập • TM/Phụ Đề" : "Phát Ngay • TM/Phụ Đề"
 
@@ -2338,11 +2378,11 @@ public final class FPTDirectClient {
                         portraitLogo: portraitPoster,
                         titleLogo: titleLogo,
                         desc: fullDesc,
-                        is4K: false,
+                        is4K: is4KVodItem,
                         isDRM: false,
                         isLive: false,
-                        statusText: statusLabel,
-                        resolution: countryStr.isEmpty ? "Full HD (1080p)" : "\(countryStr) • 1080p FHD",
+                        statusText: is4KVodItem ? "4K UHD • \(statusLabel)" : statusLabel,
+                        resolution: is4KVodItem ? (countryStr.isEmpty ? "4K UHD (2160p)" : "\(countryStr) • 4K UHD") : (countryStr.isEmpty ? "Full HD (1080p)" : "\(countryStr) • 1080p FHD"),
                         fps: subAudioTag,
                         isVod: true,
                         isSeries: true,
@@ -2363,11 +2403,11 @@ public final class FPTDirectClient {
                         portraitLogo: portraitPoster,
                         titleLogo: titleLogo,
                         desc: fullDesc,
-                        is4K: false,
+                        is4K: is4KVodItem,
                         isDRM: false,
                         isLive: false,
-                        statusText: statusLabel,
-                        resolution: countryStr.isEmpty ? "Full HD (1080p)" : "\(countryStr) • 1080p FHD",
+                        statusText: is4KVodItem ? "4K UHD • \(statusLabel)" : statusLabel,
+                        resolution: is4KVodItem ? (countryStr.isEmpty ? "4K UHD (2160p)" : "\(countryStr) • 4K UHD") : (countryStr.isEmpty ? "Full HD (1080p)" : "\(countryStr) • 1080p FHD"),
                         fps: subAudioTag,
                         isVod: true,
                         isSeries: false,
@@ -2398,8 +2438,8 @@ public final class FPTDirectClient {
         }
 
         let eplBlocks: [(blockId: String, blockType: String, tag: String)] = [
-            ("692d0460b3310d7520862257", "highlight", "HIGHLIGHTS NGOẠI HẠNG ANH"),
             ("692d0474a643252ac65c844a", "highlight", "XEM LẠI TRẬN ĐẤU"),
+            ("692d0460b3310d7520862257", "highlight", "HIGHLIGHTS NGOẠI HẠNG ANH"),
             ("692d0486014aff76cc46497f", "highlight", "BÀN THẮNG & TẠP CHÍ"),
             ("69c67c129be47c06f53b20e3", "highlight", "THẾ GIỚI NGOẠI HẠNG"),
             ("6ab12f5aba11facdaaf4c428", "highlight", "KHOẢNH KHẮC NÓNG"),
@@ -2438,7 +2478,51 @@ public final class FPTDirectClient {
 
         fetchedBlocks.sort { $0.index < $1.index }
 
-        var eplList: [FPTChannel] = []
+        // Tự động dò nhanh các VOD trong 2 khối "XEM LẠI TRẬN ĐẤU" & "HIGHLIGHTS NGOẠI HẠNG ANH" để phát hiện 100% trận có master_4k_...m3u8
+        var detected4KIds: Set<String> = known4KEplVodIds
+        if config.isAuthenticated {
+            var candidateVodIds: [String] = []
+            for blk in fetchedBlocks where blk.index <= 1 {
+                for item in blk.items {
+                    let itype = (item["type"] as? String) ?? ""
+                    guard itype == "vod" || itype.isEmpty else { continue }
+                    let vid = String(describing: item["id"] ?? item["_id"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !vid.isEmpty && !candidateVodIds.contains(vid) {
+                        candidateVodIds.append(vid)
+                    }
+                }
+            }
+            await withTaskGroup(of: String?.self) { group in
+                for vid in candidateVodIds.prefix(36) {
+                    group.addTask { [weak self] in
+                        guard let self = self else { return nil }
+                        guard let (st, payload) = try? await self.requestIOSJSON(
+                            config: config,
+                            route: "stream/vod/\(vid)/0/adaptive_bitrate",
+                            extraQuery: [("data_type", ""), ("stream_profile", "1")],
+                            authenticated: true
+                        ), st == 200, let sdata = payload["data"] as? [String: Any] else {
+                            return nil
+                        }
+                        let h265Drm = ((sdata["url_hls_drm_h265"] as? String) ?? "").lowercased()
+                        let h265Clear = ((sdata["url_hls_h265"] as? String) ?? "").lowercased()
+                        let dashH265 = ((sdata["url_dash_drm_h265"] as? String) ?? "").lowercased()
+                        if h265Drm.contains("4k") || h265Clear.contains("4k") || dashH265.contains("4k") {
+                            return vid
+                        }
+                        return nil
+                    }
+                }
+                for await found in group {
+                    if let f = found {
+                        detected4KIds.insert(f)
+                    }
+                }
+            }
+        }
+
+        var epl4KList: [FPTChannel] = []
+        var eplStandardList: [FPTChannel] = []
         var seenIds: Set<String> = []
 
         for blk in fetchedBlocks {
@@ -2479,32 +2563,45 @@ public final class FPTDirectClient {
                 }
 
                 let statusLabel = !durationStr.isEmpty ? durationStr : "Premier League"
+                let is4KMatch = detected4KIds.contains(vodId) || title.lowercased().contains("4k")
+                let badgeText: String
+                if is4KMatch {
+                    badgeText = (blk.tag == "XEM LẠI TRẬN ĐẤU") ? "⚽ XEM LẠI TRẬN ĐẤU 4K UHD" : "⚽ HIGHLIGHTS 4K UHD"
+                } else {
+                    badgeText = "⚽ \(blk.tag)"
+                }
 
-                eplList.append(FPTChannel(
+                let ch = FPTChannel(
                     id: "epl_hl_\(vodId)",
                     channelId: vodId,
                     name: title,
-                    badge: "⚽ \(blk.tag)",
+                    badge: badgeText,
                     categoryId: "epl_highlights",
                     category: "⚽ HIGHLIGHT NGOẠI HẠNG ANH",
                     logo: landscapePoster,
                     portraitLogo: portraitPoster,
                     titleLogo: titleLogo,
                     desc: fullDesc,
-                    is4K: false,
+                    is4K: is4KMatch,
                     isDRM: true,
                     isLive: false,
-                    statusText: statusLabel,
-                    resolution: "Premier League • 1080p FHD",
-                    fps: statusLabel,
+                    statusText: is4KMatch ? "4K UHD • \(statusLabel)" : statusLabel,
+                    resolution: is4KMatch ? "4K UHD (2160p50 HEVC)" : "Premier League • 1080p FHD",
+                    fps: is4KMatch ? "50fps • FairPlay 4K" : statusLabel,
                     isVod: true,
                     isSeries: false,
                     vodId: vodId,
                     episodeId: "0"
-                ))
+                )
+                if is4KMatch {
+                    epl4KList.append(ch)
+                } else {
+                    eplStandardList.append(ch)
+                }
             }
         }
 
+        let eplList = epl4KList + eplStandardList
         if !eplList.isEmpty {
             cachedEplHighlights = eplList
             lastEplHighlightsFetchTime = now
@@ -2620,22 +2717,23 @@ public final class FPTDirectClient {
                 priority = 2
             }
 
+            let is4KSearchItem = title.lowercased().contains("4k") || known4KVodIds.contains(vodId)
             let ch = FPTChannel(
                 id: "search_\(vodId)",
                 channelId: vodId,
                 name: title,
-                badge: isSeriesItem ? "🎞️ PHIM BỘ" : "🎬 PHIM LẺ",
+                badge: is4KSearchItem ? (isSeriesItem ? "🎞️ PHIM BỘ 4K UHD" : "🎬 PHIM LẺ 4K UHD") : (isSeriesItem ? "🎞️ PHIM BỘ" : "🎬 PHIM LẺ"),
                 categoryId: isSeriesItem ? "vod_series" : "vod_movies",
                 category: isSeriesItem ? "Phim Bộ" : "Phim Lẻ",
                 logo: poster,
                 portraitLogo: portraitPoster,
                 titleLogo: titleLogo,
                 desc: fullDesc,
-                is4K: false,
+                is4K: is4KSearchItem,
                 isDRM: false,
                 isLive: false,
-                statusText: statusLabel,
-                resolution: countryStr.isEmpty ? "Full HD (1080p)" : "\(countryStr) • 1080p FHD",
+                statusText: is4KSearchItem ? "4K UHD • \(statusLabel)" : statusLabel,
+                resolution: is4KSearchItem ? (countryStr.isEmpty ? "4K UHD (2160p)" : "\(countryStr) • 4K UHD") : (countryStr.isEmpty ? "Full HD (1080p)" : "\(countryStr) • 1080p FHD"),
                 fps: isSeriesItem ? "Chọn Tập • TM/Phụ Đề" : "Phát Ngay • TM/Phụ Đề",
                 isVod: true,
                 isSeries: isSeriesItem,
@@ -3014,7 +3112,7 @@ public final class FPTDirectClient {
         let rawHlsH264 = !lockedH264.originalUrl.isEmpty ? lockedH264.originalUrl : firstPlayableH264
         let hls4K = locked4K.isReachable ? locked4K.lockedUrl : ""
         let hlsH264 = lockedH264.isReachable ? lockedH264.lockedUrl : rawHlsH264
-        let hasTrue4KVod = locked4K.isReachable && (locked4K.maxHeight >= 1440 || title.lowercased().contains("4k"))
+        let hasTrue4KVod = locked4K.isReachable && (locked4K.maxHeight >= 1440 || rawHls4K.lowercased().contains("4k") || title.lowercased().contains("4k") || known4KVodIds.contains(cleanVodId))
         let effectiveHls4K = hasTrue4KVod ? hls4K : ""
 
         let primaryHls: String
