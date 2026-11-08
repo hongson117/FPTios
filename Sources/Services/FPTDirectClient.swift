@@ -2577,8 +2577,8 @@ public final class FPTDirectClient {
         async let lockedH264Task = resolveFirstReachableLockedHls(candidates: h264Candidates, streamSession: streamSession)
         let (locked4K, lockedH264) = await (locked4KTask, lockedH264Task)
 
-        let rawHls4K = !locked4K.rawUrl.isEmpty ? locked4K.rawUrl : firstPlayable4K
-        let rawHlsH264 = !lockedH264.rawUrl.isEmpty ? lockedH264.rawUrl : firstPlayableH264
+        let rawHls4K = !locked4K.originalUrl.isEmpty ? locked4K.originalUrl : firstPlayable4K
+        let rawHlsH264 = !lockedH264.originalUrl.isEmpty ? lockedH264.originalUrl : firstPlayableH264
         let hls4K = locked4K.isReachable ? locked4K.lockedUrl : ""
         let hlsH264 = lockedH264.isReachable ? lockedH264.lockedUrl : rawHlsH264
         let hasTrue4KVod = locked4K.isReachable && (locked4K.maxHeight >= 1440 || title.lowercased().contains("4k"))
@@ -2927,8 +2927,8 @@ public final class FPTDirectClient {
         let firstPlayableH264 = h264Cands.first(where: { isPlayableHls($0) }) ?? ""
         let firstPlayableClear = clearCands.first(where: { isPlayableHls($0) }) ?? ""
 
-        let rawHls4K = !locked4K.rawUrl.isEmpty ? locked4K.rawUrl : firstPlayable4K
-        let rawHlsH264 = !lockedH264.rawUrl.isEmpty ? lockedH264.rawUrl : firstPlayableH264
+        let rawHls4K = !locked4K.originalUrl.isEmpty ? locked4K.originalUrl : firstPlayable4K
+        let rawHlsH264 = !lockedH264.originalUrl.isEmpty ? lockedH264.originalUrl : firstPlayableH264
         let rawHlsClear = firstPlayableClear
 
         // Với trận đấu theo lịch (!eventId.isEmpty), nếu CDN trả 404 (chưa bật encoder), giữ hls4K/hlsH264 rỗng để hiển thị Màn Hình Chờ Phát Sóng
